@@ -7,10 +7,20 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import os
+import logging
 
 from app.core.config import settings
 from app.core.database import engine, Base
 from app.api import auth, assessments
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(levelname)s:%(name)s:%(message)s',
+    handlers=[
+        logging.StreamHandler()
+    ]
+)
 
 
 @asynccontextmanager

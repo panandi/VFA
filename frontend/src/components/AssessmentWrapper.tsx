@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useAssessment } from '../context/AssessmentContext';
 import { Stepper } from './Stepper';
+import { AssessmentSkeleton } from './AssessmentSkeleton';
 
 interface Props {
   children: React.ReactNode;
@@ -41,7 +42,8 @@ export function AssessmentWrapper({ children }: Props) {
     }
   };
 
-  if (isLoading) {
+  // Initial loading (no assessment data yet)
+  if (isLoading && !assessment) {
     return (
       <div className="flex justify-center items-center py-20">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-singtel-red"></div>
@@ -90,7 +92,7 @@ export function AssessmentWrapper({ children }: Props) {
         onStepClick={handleStepClick}
       />
 
-      {/* Content */}
+      {/* Content - Keep content visible, don't replace with skeleton */}
       <div className="mt-6">{children}</div>
     </div>
   );

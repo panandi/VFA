@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAssessment } from '../../context/AssessmentContext';
 import { FileUpload } from '../../components/FileUpload';
+import { ProcessingBanner } from '../../components/ProcessingBanner';
 import { api } from '../../services/api';
 import toast from 'react-hot-toast';
 
@@ -12,6 +13,11 @@ interface ExtractionStatus {
   has_errors: boolean;
   extracted_years: number;
   status: 'pending' | 'processing' | 'complete';
+  current_page?: number;
+  total_pages?: number;
+  statement_type?: string;
+  stage?: string;
+  time_remaining_seconds?: number;
 }
 
 export function Step1Upload() {
@@ -127,8 +133,39 @@ export function Step1Upload() {
     return Math.round((extractionStatus.processed_files / extractionStatus.total_files) * 100);
   };
 
+  // Get current processing status message
+  const getStatusMessage = () => {
+    if (!extractionStatus) return '';
+
+    if (extractionStatus.is_complete) {
+      return 'All documents have been processed successfully';
+    }
+
+    if (extractionStatus.status === 'processing') {
+      return `Extracting balance sheet, P&L, and cash flow data using AI...`;
+    }
+
+    return 'Preparing to process documents...';
+  };
+
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+    <>
+      {/* Processing Banner - Fixed at top */}
+      {isPolling && extractionStatus && (
+        <ProcessingBanner
+          processedFiles={extractionStatus.processed_files}
+          totalFiles={extractionStatus.total_files}
+          currentStatus={getStatusMessage()}
+          extractedYears={extractionStatus.is_complete ? extractionStatus.extracted_years : undefined}
+          currentPage={extractionStatus.current_page}
+          totalPages={extractionStatus.total_pages}
+          statementType={extractionStatus.statement_type}
+          timeRemainingSeconds={extractionStatus.time_remaining_seconds}
+        />
+      )}
+
+      {/* Main Content - Add padding top when banner is visible */}
+      <div className={`grid grid-cols-1 lg:grid-cols-2 gap-8 ${isPolling ? 'pt-32' : ''}`}>
       {/* Left Column - File Upload */}
       <div>
         <h2 className="text-xl font-semibold text-gray-900 mb-4">
@@ -206,46 +243,6 @@ export function Step1Upload() {
               ))}
             </div>
 
-            {/* Overall Extraction Status */}
-            {extractionStatus && extractionStatus.status === 'processing' && (
-              <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-medium text-blue-700">
-                    Extracting Financial Data
-                  </span>
-                  <span className="text-sm text-blue-600">
-                    {extractionStatus.processed_files}/{extractionStatus.total_files} files
-                  </span>
-                </div>
-                <div className="w-full bg-blue-200 rounded-full h-2.5">
-                  <div
-                    className="bg-blue-600 h-2.5 rounded-full transition-all duration-500"
-                    style={{ width: `${getProgressPercent()}%` }}
-                  />
-                </div>
-                <p className="text-xs text-blue-600 mt-2">
-                  Please wait while AI extracts balance sheet, P&L, and cash flow data...
-                </p>
-              </div>
-            )}
-
-            {/* Extraction Complete Status */}
-            {extractionStatus && extractionStatus.is_complete && extractionStatus.extracted_years > 0 && (
-              <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-lg">
-                <div className="flex items-center space-x-2">
-                  <svg className="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  <span className="text-sm font-medium text-green-700">
-                    Extraction Complete!
-                  </span>
-                </div>
-                <p className="text-xs text-green-600 mt-1">
-                  Found financial data for {extractionStatus.extracted_years} fiscal year(s).
-                  You can review and edit the data in the next step.
-                </p>
-              </div>
-            )}
           </div>
         )}
       </div>
@@ -287,7 +284,8 @@ export function Step1Upload() {
       <div className="lg:col-span-2 flex justify-end space-x-4 pt-6 border-t">
         <button
           onClick={handleSaveProgress}
-          className="flex items-center px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
+          disabled={isPolling}
+          className="flex items-center px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path
@@ -302,7 +300,7 @@ export function Step1Upload() {
         <button
           onClick={handleContinue}
           disabled={isSaving || isPolling}
-          className="px-6 py-2 bg-singtel-red text-white rounded-lg font-medium hover:bg-singtel-darkred disabled:opacity-50 flex items-center"
+          className="px-6 py-2 bg-singtel-red text-white rounded-lg font-medium hover:bg-singtel-darkred disabled:opacity-50 disabled:cursor-not-allowed flex items-center"
         >
           {isPolling ? (
             <>
@@ -320,5 +318,6 @@ export function Step1Upload() {
         </button>
       </div>
     </div>
+    </>
   );
 }
