@@ -1,7 +1,8 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from enum import Enum
+import json
 
 
 class AssessmentStatus(str, Enum):
@@ -84,8 +85,35 @@ class ExtractedDataCreate(BaseModel):
     net_cash_flow: Optional[float] = None
 
 
-class ExtractedDataUpdate(ExtractedDataCreate):
-    """Schema for updating extracted financial data."""
+class ExtractedDataUpdate(BaseModel):
+    """Schema for updating extracted financial data (all fields optional for partial updates)."""
+    fiscal_year: Optional[int] = None
+    total_assets: Optional[float] = None
+    current_assets: Optional[float] = None
+    non_current_assets: Optional[float] = None
+    total_liabilities: Optional[float] = None
+    current_liabilities: Optional[float] = None
+    non_current_liabilities: Optional[float] = None
+    total_equity: Optional[float] = None
+    retained_earnings: Optional[float] = None
+    working_capital: Optional[float] = None
+    cash_and_equivalents: Optional[float] = None
+    inventory: Optional[float] = None
+    accounts_receivable: Optional[float] = None
+    accounts_payable: Optional[float] = None
+    revenue: Optional[float] = None
+    cost_of_sales: Optional[float] = None
+    gross_profit: Optional[float] = None
+    operating_expenses: Optional[float] = None
+    operating_income: Optional[float] = None
+    ebit: Optional[float] = None
+    ebitda: Optional[float] = None
+    interest_expense: Optional[float] = None
+    net_income: Optional[float] = None
+    operating_cash_flow: Optional[float] = None
+    investing_cash_flow: Optional[float] = None
+    financing_cash_flow: Optional[float] = None
+    net_cash_flow: Optional[float] = None
     is_confirmed: Optional[bool] = None
 
 
@@ -93,8 +121,21 @@ class ExtractedDataResponse(ExtractedDataCreate):
     """Schema for extracted data response."""
     id: int
     is_confirmed: bool
-    confidence_scores: Optional[Dict[str, float]] = None
+    confidence_scores: Optional[Dict[str, Any]] = None  # Can contain nested v2_output
     extraction_date: datetime
+
+    @field_validator('confidence_scores', mode='before')
+    @classmethod
+    def parse_confidence_scores(cls, v):
+        """Handle both JSON string and dict formats for backwards compatibility."""
+        if v is None:
+            return None
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except (json.JSONDecodeError, TypeError):
+                return {"raw": v}
+        return v
 
     class Config:
         from_attributes = True
@@ -143,11 +184,20 @@ class ZScoreComponents(BaseModel):
 class RiskAssessmentResponse(BaseModel):
     """Schema for risk assessment response."""
     id: int
+    company_type: Optional[str] = "private"
     z_score: Optional[float]
     risk_level: Optional[str]
     z_score_components: Optional[ZScoreComponents] = None
 
+    # Z-Score individual components (for frontend compatibility)
+    z_score_x1: Optional[float] = None  # Working Capital / Total Assets
+    z_score_x2: Optional[float] = None  # Retained Earnings / Total Assets
+    z_score_x3: Optional[float] = None  # EBIT / Total Assets
+    z_score_x4: Optional[float] = None  # Book Value of Equity / Total Liabilities
+    z_score_x5: Optional[float] = None  # Sales / Total Assets
+
     # Liquidity Ratios
+    working_capital_ratio: Optional[float] = None
     current_ratio: Optional[float]
     quick_ratio: Optional[float]
     cash_ratio: Optional[float]
@@ -163,14 +213,27 @@ class RiskAssessmentResponse(BaseModel):
     debt_to_equity: Optional[float]
     debt_to_assets: Optional[float]
     interest_coverage: Optional[float]
+    retained_earnings_to_assets: Optional[float] = None
 
     # Efficiency Ratios
     asset_turnover: Optional[float]
     inventory_turnover: Optional[float]
     receivables_turnover: Optional[float]
+    sales_to_working_capital: Optional[float] = None
+    creditors_to_sales: Optional[float] = None
+
+    # Growth Ratios
+    growth_sales: Optional[float] = None
+    growth_net_profit: Optional[float] = None
+    growth_gross_profit_margin: Optional[float] = None
+    growth_net_profit_margin: Optional[float] = None
+
+    # Full ratios with risk levels
+    ratios_detail: Optional[Dict[str, Any]] = None
 
     calculated_at: datetime
     fiscal_year_used: Optional[int]
+    previous_fiscal_year_used: Optional[int] = None
 
     class Config:
         from_attributes = True

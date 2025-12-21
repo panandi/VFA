@@ -8,6 +8,7 @@ from datetime import datetime
 
 from app.core.database import get_db
 from app.services.pdf_report import generate_assessment_pdf
+from app.services.excel_report import generate_assessment_excel
 from app.core.security import get_current_user
 from app.core.config import settings
 from app.models.user import User
@@ -29,10 +30,15 @@ from app.schemas.assessment import (
     QualitativeResponseCreate,
     QualitativeResponseUpdate
 )
-from app.services.financial_calculator import FinancialCalculator
-# OPTIMIZED: Using new extraction agent with 3-5x speed improvement and 10x cost reduction
-from app.agents.extraction_agent_optimized import run_extraction_pipeline, extraction_progress
+from app.services.financial_calculator import FinancialCalculator, CompanyType
+# Extraction agents - v2 is the new default with OCR support
+from app.agents.extraction_agent_optimized import run_extraction_pipeline as run_extraction_v1
+from app.agents.extraction_agent_optimized import extraction_progress as extraction_progress_v1
+from app.agents.extraction_agent_v2 import run_extraction_pipeline_v2, extraction_progress as extraction_progress_v2
 from app.agents.recommendation_agent import generate_recommendation
+
+# Use v2 by default (supports OCR for scanned PDFs)
+USE_EXTRACTION_V2 = True
 
 router = APIRouter(prefix="/assessments", tags=["Assessments"])
 
@@ -246,12 +252,21 @@ async def upload_financial_statement(
     db.refresh(statement)
 
     # Trigger extraction in background
-    background_tasks.add_task(
-        run_extraction_pipeline,
-        assessment_id=assessment_id,
-        statement_id=statement.id,
-        file_path=file_path
-    )
+    # Use v2 extraction (with OCR support) by default
+    if USE_EXTRACTION_V2:
+        background_tasks.add_task(
+            run_extraction_pipeline_v2,
+            assessment_id=assessment_id,
+            statement_id=statement.id,
+            file_path=file_path
+        )
+    else:
+        background_tasks.add_task(
+            run_extraction_v1,
+            assessment_id=assessment_id,
+            statement_id=statement.id,
+            file_path=file_path
+        )
 
     return {
         "message": "File uploaded successfully",
@@ -302,8 +317,8 @@ async def get_extraction_status(
         .count()
     )
 
-    # Get real-time progress from extraction agent
-    progress_info = extraction_progress.get(assessment_id, {})
+    # Get real-time progress from extraction agent (check both v1 and v2)
+    progress_info = extraction_progress_v2.get(assessment_id, {}) or extraction_progress_v1.get(assessment_id, {})
     current_page = progress_info.get('current_page', 0)
     total_pages = progress_info.get('total_pages', 0)
     statement_type = progress_info.get('statement_type', '')
@@ -368,14 +383,88 @@ async def trigger_extraction(
     )
 
     for statement in pending_statements:
-        background_tasks.add_task(
-            run_extraction_pipeline,
-            assessment_id=assessment_id,
-            statement_id=statement.id,
-            file_path=statement.file_path
-        )
+        if USE_EXTRACTION_V2:
+            background_tasks.add_task(
+                run_extraction_pipeline_v2,
+                assessment_id=assessment_id,
+                statement_id=statement.id,
+                file_path=statement.file_path
+            )
+        else:
+            background_tasks.add_task(
+                run_extraction_v1,
+                assessment_id=assessment_id,
+                statement_id=statement.id,
+                file_path=statement.file_path
+            )
 
     return {"message": f"Extraction triggered for {len(pending_statements)} files"}
+
+
+# Create new financial data (add a new fiscal year)
+@router.post("/{assessment_id}/financial-data")
+async def create_financial_data(
+    assessment_id: int,
+    data: ExtractedDataUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Create new financial data for a specific fiscal year (manual entry)."""
+    assessment = (
+        db.query(VendorAssessment)
+        .filter(
+            VendorAssessment.id == assessment_id,
+            VendorAssessment.created_by == current_user.id
+        )
+        .first()
+    )
+
+    if not assessment:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assessment not found"
+        )
+
+    if not data.fiscal_year:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Fiscal year is required when creating new financial data"
+        )
+
+    # Check if fiscal year already exists
+    existing = (
+        db.query(ExtractedFinancialData)
+        .filter(
+            ExtractedFinancialData.assessment_id == assessment_id,
+            ExtractedFinancialData.fiscal_year == data.fiscal_year
+        )
+        .first()
+    )
+
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Financial data for fiscal year {data.fiscal_year} already exists"
+        )
+
+    # Create new financial data record
+    new_data = ExtractedFinancialData(
+        assessment_id=assessment_id,
+        fiscal_year=data.fiscal_year,
+        is_confirmed=False
+    )
+
+    # Set all provided fields
+    update_fields = data.model_dump(exclude_unset=True, exclude={'fiscal_year'})
+    for field, value in update_fields.items():
+        if hasattr(new_data, field):
+            setattr(new_data, field, value)
+
+    db.add(new_data)
+    db.commit()
+    db.refresh(new_data)
+
+    return new_data
 
 
 # Update extracted financial data
@@ -406,13 +495,58 @@ async def update_financial_data(
         )
 
     update_data = data.model_dump(exclude_unset=True)
+
+    # Debug logging
+    print(f"\n=== UPDATE FINANCIAL DATA DEBUG ===")
+    print(f"Assessment ID: {assessment_id}, Data ID: {data_id}")
+    print(f"Fiscal Year: {extracted_data.fiscal_year}")
+    print(f"Update data received: {update_data}")
+
     for field, value in update_data.items():
+        old_value = getattr(extracted_data, field, None)
+        print(f"  {field}: {old_value} -> {value}")
         setattr(extracted_data, field, value)
 
     db.commit()
     db.refresh(extracted_data)
 
+    # Log the updated values
+    print(f"After update - current_assets: {extracted_data.current_assets}")
+    print(f"After update - current_liabilities: {extracted_data.current_liabilities}")
+    print(f"After update - cash_and_equivalents: {extracted_data.cash_and_equivalents}")
+    print(f"=================================\n")
+
     return extracted_data
+
+
+# Delete financial data for a fiscal year
+@router.delete("/{assessment_id}/financial-data/{data_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_financial_data(
+    assessment_id: int,
+    data_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Delete financial data for a specific fiscal year."""
+    extracted_data = (
+        db.query(ExtractedFinancialData)
+        .join(VendorAssessment)
+        .filter(
+            ExtractedFinancialData.id == data_id,
+            VendorAssessment.id == assessment_id,
+            VendorAssessment.created_by == current_user.id
+        )
+        .first()
+    )
+
+    if not extracted_data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Financial data not found"
+        )
+
+    db.delete(extracted_data)
+    db.commit()
 
 
 # Confirm all financial data
@@ -493,10 +627,27 @@ async def update_qualitative_response(
 @router.post("/{assessment_id}/calculate")
 async def calculate_ratios(
     assessment_id: int,
+    company_type: str = "private",  # "public" or "private"
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Calculate financial ratios and Z-score."""
+    """
+    Calculate financial ratios and Z-score.
+
+    Args:
+        company_type: "public" or "private" - affects Z-Score calculation formula
+
+    Z-Score Formulas:
+        - Public: Z = 1.200*X1 + 1.400*X2 + 3.300*X3 + 0.600*X4a + 1.000*X5
+        - Private: Z = 0.717*X1 + 0.847*X2 + 3.107*X3 + 0.420*X4b + 0.998*X5
+
+    Where:
+        - X1 = Working Capital / Total Assets
+        - X2 = Retained Earnings / Total Assets
+        - X3 = EBIT / Total Assets
+        - X4a/X4b = Equity / Total Liabilities
+        - X5 = Sales / Total Assets
+    """
     assessment = (
         db.query(VendorAssessment)
         .filter(
@@ -512,27 +663,74 @@ async def calculate_ratios(
             detail="Assessment not found"
         )
 
-    # Get the most recent confirmed financial data
-    latest_data = (
+    # Get all confirmed financial data ordered by year
+    all_data = (
         db.query(ExtractedFinancialData)
         .filter(
             ExtractedFinancialData.assessment_id == assessment_id,
             ExtractedFinancialData.is_confirmed == True
         )
         .order_by(ExtractedFinancialData.fiscal_year.desc())
-        .first()
+        .all()
     )
 
-    if not latest_data:
+    if not all_data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No confirmed financial data available"
         )
 
-    # Calculate ratios
-    calculator = FinancialCalculator(latest_data)
-    ratios = calculator.calculate_all_ratios()
-    z_score_result = calculator.calculate_z_score()
+    # Get current and previous year data
+    current_year_data = all_data[0]
+    previous_year_data = all_data[1] if len(all_data) > 1 else None
+
+    # Determine company type enum
+    comp_type = CompanyType.PUBLIC if company_type.lower() == "public" else CompanyType.PRIVATE
+
+    # Calculate ratios using new calculator
+    calculator = FinancialCalculator(
+        current_year_data=current_year_data,
+        previous_year_data=previous_year_data,
+        company_type=comp_type
+    )
+
+    # Get full assessment (ratios + z-score + summary)
+    full_assessment = calculator.calculate_full_assessment()
+    z_score_result = full_assessment["z_score"]
+    ratios = full_assessment["ratios"]
+    summary = full_assessment["summary"]
+
+    # Debug logging for calculation
+    print(f"\n=== RATIO CALCULATION DEBUG ===")
+    print(f"Company Type: {comp_type.value}")
+    print(f"Fiscal Year: {current_year_data.fiscal_year}")
+    print(f"Data ID: {current_year_data.id}")
+    print(f"\n--- LIQUIDITY RATIO INPUTS ---")
+    print(f"  current_assets: {current_year_data.current_assets}")
+    print(f"  current_liabilities: {current_year_data.current_liabilities}")
+    print(f"  cash_and_equivalents: {current_year_data.cash_and_equivalents}")
+    print(f"  inventory: {current_year_data.inventory}")
+    print(f"\n--- CALCULATED LIQUIDITY RATIOS ---")
+    print(f"  current_ratio: {ratios['liquidity']['current_ratio']['value']}")
+    print(f"  quick_ratio: {ratios['liquidity']['quick_ratio']['value']}")
+    print(f"  cash_ratio: {ratios['liquidity']['cash_ratio']['value']}")
+    print(f"\n--- OTHER INPUT DATA ---")
+    print(f"  total_assets: {current_year_data.total_assets}")
+    print(f"  total_liabilities: {current_year_data.total_liabilities}")
+    print(f"  total_equity: {current_year_data.total_equity}")
+    print(f"  working_capital: {current_year_data.working_capital}")
+    print(f"  retained_earnings: {current_year_data.retained_earnings}")
+    print(f"  revenue: {current_year_data.revenue}")
+    print(f"  ebit: {current_year_data.ebit}")
+    print(f"  operating_income: {current_year_data.operating_income}")
+    print(f"  net_income: {current_year_data.net_income}")
+    print(f"  interest_expense: {current_year_data.interest_expense}")
+    print(f"\n--- Z-SCORE RESULT ---")
+    print(f"  z_score: {z_score_result.get('z_score')}")
+    print(f"  risk_level: {z_score_result.get('risk_level')}")
+    print(f"  components: {z_score_result.get('components')}")
+    print(f"  components_available: {z_score_result.get('components_available')}/5")
+    print(f"=================================\n")
 
     # Create or update risk assessment
     risk_assessment = (
@@ -546,37 +744,69 @@ async def calculate_ratios(
         db.add(risk_assessment)
 
     # Update risk assessment with calculated values
-    risk_assessment.z_score = z_score_result["z_score"]
-    risk_assessment.z_score_x1 = z_score_result["components"]["x1"]
-    risk_assessment.z_score_x2 = z_score_result["components"]["x2"]
-    risk_assessment.z_score_x3 = z_score_result["components"]["x3"]
-    risk_assessment.z_score_x4 = z_score_result["components"]["x4"]
-    risk_assessment.z_score_x5 = z_score_result["components"]["x5"]
-    risk_assessment.risk_level = z_score_result["risk_level"]
+    risk_assessment.company_type = comp_type.value
+
+    # Z-Score and components
+    components = z_score_result.get("components", {})
+    risk_assessment.z_score = z_score_result.get("z_score")
+    risk_assessment.z_score_x1 = components.get("x1")
+    risk_assessment.z_score_x2 = components.get("x2")
+    risk_assessment.z_score_x3 = components.get("x3")
+    risk_assessment.z_score_x4 = components.get("x4")
+    risk_assessment.z_score_x5 = components.get("x5")
+    risk_assessment.risk_level = summary.get("overall_risk_level")
 
     # Liquidity ratios
-    risk_assessment.current_ratio = ratios["liquidity"]["current_ratio"]
-    risk_assessment.quick_ratio = ratios["liquidity"]["quick_ratio"]
-    risk_assessment.cash_ratio = ratios["liquidity"]["cash_ratio"]
+    risk_assessment.working_capital_ratio = ratios["liquidity"]["working_capital_ratio"]["value"]
+    risk_assessment.current_ratio = ratios["liquidity"]["current_ratio"]["value"]
+    risk_assessment.quick_ratio = ratios["liquidity"]["quick_ratio"]["value"]
+    risk_assessment.cash_ratio = ratios["liquidity"]["cash_ratio"]["value"]
 
     # Profitability ratios
-    risk_assessment.gross_margin = ratios["profitability"]["gross_margin"]
-    risk_assessment.operating_margin = ratios["profitability"]["operating_margin"]
-    risk_assessment.net_margin = ratios["profitability"]["net_margin"]
-    risk_assessment.roa = ratios["profitability"]["roa"]
-    risk_assessment.roe = ratios["profitability"]["roe"]
+    risk_assessment.gross_margin = ratios["profitability"]["gross_margin"]["value"]
+    risk_assessment.operating_margin = ratios["profitability"]["net_margin"]["value"]  # Using net_margin
+    risk_assessment.net_margin = ratios["profitability"]["net_margin"]["value"]
+    risk_assessment.roa = ratios["profitability"]["roa"]["value"]
+    risk_assessment.roe = ratios["profitability"]["roe"]["value"]
 
     # Leverage ratios
-    risk_assessment.debt_to_equity = ratios["leverage"]["debt_to_equity"]
-    risk_assessment.debt_to_assets = ratios["leverage"]["debt_to_assets"]
-    risk_assessment.interest_coverage = ratios["leverage"]["interest_coverage"]
+    risk_assessment.debt_to_equity = ratios["leverage"]["debt_to_equity"]["value"]
+    risk_assessment.debt_to_assets = ratios["leverage"]["debt_to_assets"]["value"]
+    risk_assessment.interest_coverage = ratios["leverage"]["interest_coverage"]["value"]
+    risk_assessment.retained_earnings_to_assets = ratios["leverage"]["retained_earnings_to_assets"]["value"]
 
     # Efficiency ratios
-    risk_assessment.asset_turnover = ratios["efficiency"]["asset_turnover"]
-    risk_assessment.inventory_turnover = ratios["efficiency"]["inventory_turnover"]
-    risk_assessment.receivables_turnover = ratios["efficiency"]["receivables_turnover"]
+    risk_assessment.asset_turnover = ratios["efficiency"]["sales_to_assets"]["value"]
+    risk_assessment.inventory_turnover = ratios["efficiency"]["inventory_turnover"]["value"]
+    risk_assessment.receivables_turnover = ratios["efficiency"]["sales_to_receivables"]["value"]
+    risk_assessment.sales_to_working_capital = ratios["efficiency"]["sales_to_working_capital"]["value"]
+    risk_assessment.creditors_to_sales = ratios["efficiency"]["creditors_to_sales"]["value"]
 
-    risk_assessment.fiscal_year_used = latest_data.fiscal_year
+    # Growth ratios
+    risk_assessment.growth_sales = ratios["growth"]["growth_sales"]["value"]
+    risk_assessment.growth_net_profit = ratios["growth"]["growth_net_profit"]["value"]
+    risk_assessment.growth_gross_profit_margin = ratios["growth"]["growth_gross_profit_margin"]["value"]
+    risk_assessment.growth_net_profit_margin = ratios["growth"]["growth_net_profit_margin"]["value"]
+
+    # Store full ratios detail with risk levels as JSON
+    # Include Z-Score details for comprehensive reporting
+    risk_assessment.ratios_detail = {
+        **ratios,
+        "z_score": {
+            "value": z_score_result.get("z_score"),
+            "risk_level": z_score_result.get("risk_level"),
+            "company_type": z_score_result.get("company_type"),
+            "components": z_score_result.get("components"),
+            "weighted_components": z_score_result.get("weighted_components"),
+            "component_risks": z_score_result.get("component_risks"),
+            "components_available": z_score_result.get("components_available"),
+            "is_estimated": z_score_result.get("is_estimated")
+        }
+    }
+
+    # Metadata
+    risk_assessment.fiscal_year_used = current_year_data.fiscal_year
+    risk_assessment.previous_fiscal_year_used = previous_year_data.fiscal_year if previous_year_data else None
     risk_assessment.calculated_at = datetime.utcnow()
 
     # Update assessment status
@@ -586,7 +816,12 @@ async def calculate_ratios(
     db.commit()
     db.refresh(risk_assessment)
 
-    return risk_assessment
+    # Return enriched response with summary
+    return {
+        "risk_assessment": risk_assessment,
+        "summary": summary,
+        "z_score_detail": z_score_result
+    }
 
 
 # Generate AI recommendation
@@ -732,6 +967,45 @@ async def download_assessment_pdf(
     return StreamingResponse(
         pdf_buffer,
         media_type="application/pdf",
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}"
+        }
+    )
+
+
+# Download Excel report
+@router.get("/{assessment_id}/download-excel")
+async def download_assessment_excel(
+    assessment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Download the assessment as an Excel report with recommendation, Z-Score, and financial data."""
+    assessment = (
+        db.query(VendorAssessment)
+        .filter(
+            VendorAssessment.id == assessment_id,
+            VendorAssessment.created_by == current_user.id
+        )
+        .first()
+    )
+
+    if not assessment:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assessment not found"
+        )
+
+    # Generate Excel
+    excel_buffer = generate_assessment_excel(assessment)
+
+    # Create filename
+    vendor_name = assessment.vendor_name.replace(" ", "_") if assessment.vendor_name else "assessment"
+    filename = f"VFA_Report_{vendor_name}_{datetime.now().strftime('%Y%m%d')}.xlsx"
+
+    return StreamingResponse(
+        excel_buffer,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
             "Content-Disposition": f"attachment; filename={filename}"
         }

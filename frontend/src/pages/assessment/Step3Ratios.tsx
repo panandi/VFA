@@ -88,37 +88,43 @@ export function Step3Ratios() {
     return value.toFixed(3);
   };
 
+  // Z-Score weights differ between public and private companies
+  const isPublicCompany = risk?.company_type === 'public';
+  const weights = isPublicCompany
+    ? { x1: 1.200, x2: 1.400, x3: 3.300, x4: 0.600, x5: 1.000 }
+    : { x1: 0.717, x2: 0.847, x3: 3.107, x4: 0.420, x5: 0.998 };
+
   // Z-Score components for the table
   const zScoreComponents = [
     {
       label: 'Working Capital / Total Assets',
-      description: 'Measures liquid assets',
+      description: 'X1 - Measures liquid assets',
       value: risk?.z_score_x1,
-      weight: 0.717,
+      weight: weights.x1,
     },
     {
       label: 'Retained Earnings / Total Assets',
-      description: 'Measures profitability',
+      description: 'X2 - Measures profitability',
       value: risk?.z_score_x2,
-      weight: 0.847,
+      weight: weights.x2,
     },
     {
       label: 'EBIT / Total Assets',
-      description: 'Measures operating efficiency',
+      description: 'X3 - Measures operating efficiency',
       value: risk?.z_score_x3,
-      weight: 3.107,
+      weight: weights.x3,
     },
     {
-      label: 'Book Value of Equity / Total Liabilities',
-      description: 'Measures leverage',
+      label: isPublicCompany ? 'Market Value of Equity / Total Liabilities' : 'Book Value of Equity / Total Liabilities',
+      description: 'X4 - Measures leverage',
       value: risk?.z_score_x4,
-      weight: 0.42,
+      weight: weights.x4,
     },
     {
       label: 'Sales / Total Assets',
-      description: 'Measures asset turnover',
+      description: 'X5 - Measures asset turnover',
       value: risk?.z_score_x5,
-      weight: 0.998,
+      weight: weights.x5,
     },
   ];
 
@@ -197,7 +203,7 @@ export function Step3Ratios() {
                   {risk.risk_level === 'medium' && 'Medium Risk - Gray zone, monitor closely'}
                   {risk.risk_level === 'high' && 'High Risk - Financial distress likely'}
                 </p>
-                <div className="flex space-x-6 mt-4 text-sm">
+                <div className="flex space-x-6 mt-4 text-sm text-gray-900">
                   <span className="flex items-center">
                     <span className="w-3 h-3 rounded-full bg-green-500 mr-2"></span>
                     &gt; 2.9: Low Risk
@@ -261,15 +267,15 @@ export function Step3Ratios() {
               <div className="p-6 space-y-4">
                 <div className="flex justify-between">
                   <span className="text-gray-600">Current Ratio</span>
-                  <span className="font-medium">{formatRatio(risk.current_ratio)}</span>
+                  <span className="font-medium text-gray-900">{formatRatio(risk.current_ratio)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-600">Quick Ratio</span>
-                  <span className="font-medium">{formatRatio(risk.quick_ratio)}</span>
+                  <span className="font-medium text-gray-900">{formatRatio(risk.quick_ratio)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-600">Cash Ratio</span>
-                  <span className="font-medium">{formatRatio(risk.cash_ratio)}</span>
+                  <span className="font-medium text-gray-900">{formatRatio(risk.cash_ratio)}</span>
                 </div>
               </div>
             </div>
@@ -282,19 +288,19 @@ export function Step3Ratios() {
               <div className="p-6 space-y-4">
                 <div className="flex justify-between">
                   <span className="text-gray-600">ROA</span>
-                  <span className="font-medium">{formatPercent(risk.roa)}</span>
+                  <span className="font-medium text-gray-900">{formatPercent(risk.roa)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-600">ROE</span>
-                  <span className="font-medium">{formatPercent(risk.roe)}</span>
+                  <span className="font-medium text-gray-900">{formatPercent(risk.roe)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-600">Gross Margin</span>
-                  <span className="font-medium">{formatPercent(risk.gross_margin)}</span>
+                  <span className="font-medium text-gray-900">{formatPercent(risk.gross_margin)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-600">Net Margin</span>
-                  <span className="font-medium">{formatPercent(risk.net_margin)}</span>
+                  <span className="font-medium text-gray-900">{formatPercent(risk.net_margin)}</span>
                 </div>
               </div>
             </div>
@@ -307,15 +313,15 @@ export function Step3Ratios() {
               <div className="p-6 space-y-4">
                 <div className="flex justify-between">
                   <span className="text-gray-600">Debt-to-Equity</span>
-                  <span className="font-medium">{formatRatio(risk.debt_to_equity)}</span>
+                  <span className="font-medium text-gray-900">{formatRatio(risk.debt_to_equity)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-600">Debt-to-Assets</span>
-                  <span className="font-medium">{formatRatio(risk.debt_to_assets)}</span>
+                  <span className="font-medium text-gray-900">{formatRatio(risk.debt_to_assets)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-600">Interest Coverage</span>
-                  <span className="font-medium">{formatRatio(risk.interest_coverage)}</span>
+                  <span className="font-medium text-gray-900">{formatRatio(risk.interest_coverage)}</span>
                 </div>
               </div>
             </div>
@@ -328,15 +334,15 @@ export function Step3Ratios() {
               <div className="p-6 space-y-4">
                 <div className="flex justify-between">
                   <span className="text-gray-600">Asset Turnover</span>
-                  <span className="font-medium">{formatRatio(risk.asset_turnover)}</span>
+                  <span className="font-medium text-gray-900">{formatRatio(risk.asset_turnover)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-600">Inventory Turnover</span>
-                  <span className="font-medium">{formatRatio(risk.inventory_turnover)}</span>
+                  <span className="font-medium text-gray-900">{formatRatio(risk.inventory_turnover)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-600">Receivables Turnover</span>
-                  <span className="font-medium">{formatRatio(risk.receivables_turnover)}</span>
+                  <span className="font-medium text-gray-900">{formatRatio(risk.receivables_turnover)}</span>
                 </div>
               </div>
             </div>

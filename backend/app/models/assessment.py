@@ -169,6 +169,9 @@ class RiskAssessment(Base):
     id = Column(Integer, primary_key=True, index=True)
     assessment_id = Column(Integer, ForeignKey("vendor_assessments.id"), nullable=False, unique=True)
 
+    # Company Type (public/private - affects Z-Score calculation)
+    company_type = Column(String(20), default="private")
+
     # Z-Score Components
     z_score = Column(Float, nullable=True)
     z_score_x1 = Column(Float, nullable=True)  # Working Capital / Total Assets
@@ -177,10 +180,11 @@ class RiskAssessment(Base):
     z_score_x4 = Column(Float, nullable=True)  # Book Value of Equity / Total Liabilities
     z_score_x5 = Column(Float, nullable=True)  # Sales / Total Assets
 
-    # Risk Level
+    # Risk Level (overall from Z-Score)
     risk_level = Column(String(20), nullable=True)
 
     # Liquidity Ratios
+    working_capital_ratio = Column(Float, nullable=True)  # (CA - CL) / Total Assets
     current_ratio = Column(Float, nullable=True)
     quick_ratio = Column(Float, nullable=True)
     cash_ratio = Column(Float, nullable=True)
@@ -189,22 +193,35 @@ class RiskAssessment(Base):
     gross_margin = Column(Float, nullable=True)
     operating_margin = Column(Float, nullable=True)
     net_margin = Column(Float, nullable=True)
-    roa = Column(Float, nullable=True)  # Return on Assets
-    roe = Column(Float, nullable=True)  # Return on Equity
+    roa = Column(Float, nullable=True)  # Return on Assets (EBIT / Total Assets)
+    roe = Column(Float, nullable=True)  # Return on Equity (Net Profit / Equity)
 
     # Leverage Ratios
     debt_to_equity = Column(Float, nullable=True)
     debt_to_assets = Column(Float, nullable=True)
     interest_coverage = Column(Float, nullable=True)
+    retained_earnings_to_assets = Column(Float, nullable=True)
 
     # Efficiency Ratios
-    asset_turnover = Column(Float, nullable=True)
+    asset_turnover = Column(Float, nullable=True)  # Sales / Total Assets
     inventory_turnover = Column(Float, nullable=True)
-    receivables_turnover = Column(Float, nullable=True)
+    receivables_turnover = Column(Float, nullable=True)  # Sales / Accounts Receivable
+    sales_to_working_capital = Column(Float, nullable=True)
+    creditors_to_sales = Column(Float, nullable=True)
+
+    # Growth Ratios (require previous year data)
+    growth_sales = Column(Float, nullable=True)
+    growth_net_profit = Column(Float, nullable=True)
+    growth_gross_profit_margin = Column(Float, nullable=True)
+    growth_net_profit_margin = Column(Float, nullable=True)
+
+    # Full ratios detail with risk levels (JSON)
+    ratios_detail = Column(JSON, nullable=True)
 
     # Metadata
     calculated_at = Column(DateTime(timezone=True), server_default=func.now())
     fiscal_year_used = Column(Integer, nullable=True)
+    previous_fiscal_year_used = Column(Integer, nullable=True)
 
     # Relationships
     assessment = relationship("VendorAssessment", back_populates="risk_assessment")

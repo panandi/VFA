@@ -131,6 +131,17 @@ class ApiService {
   }
 
   // Financial Data
+  async createFinancialData(
+    assessmentId: number,
+    data: Partial<ExtractedData> & { fiscal_year: number }
+  ): Promise<ExtractedData> {
+    const response = await this.client.post<ExtractedData>(
+      `/assessments/${assessmentId}/financial-data`,
+      data
+    );
+    return response.data;
+  }
+
   async updateFinancialData(
     assessmentId: number,
     dataId: number,
@@ -141,6 +152,10 @@ class ApiService {
       data
     );
     return response.data;
+  }
+
+  async deleteFinancialData(assessmentId: number, dataId: number): Promise<void> {
+    await this.client.delete(`/assessments/${assessmentId}/financial-data/${dataId}`);
   }
 
   async confirmFinancialData(assessmentId: number): Promise<{ message: string; current_step: number }> {
@@ -180,6 +195,13 @@ class ApiService {
 
   async downloadPdf(assessmentId: number): Promise<Blob> {
     const response = await this.client.get(`/assessments/${assessmentId}/download-pdf`, {
+      responseType: 'blob'
+    });
+    return response.data;
+  }
+
+  async downloadExcel(assessmentId: number): Promise<Blob> {
+    const response = await this.client.get(`/assessments/${assessmentId}/download-excel`, {
       responseType: 'blob'
     });
     return response.data;

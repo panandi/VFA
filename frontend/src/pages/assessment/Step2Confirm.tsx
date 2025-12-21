@@ -7,36 +7,150 @@ import toast from 'react-hot-toast';
 
 type TabType = 'balance_sheet' | 'profit_loss' | 'cash_flow';
 
+interface AddYearModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onSubmit: (year: number) => void;
+  existingYears: number[];
+}
+
+function AddYearModal({ isOpen, onClose, onSubmit, existingYears }: AddYearModalProps) {
+  const [year, setYear] = useState(new Date().getFullYear());
+  const [error, setError] = useState('');
+
+  if (!isOpen) return null;
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (existingYears.includes(year)) {
+      setError(`Fiscal year ${year} already exists`);
+      return;
+    }
+    onSubmit(year);
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg p-6 w-96 max-w-full mx-4">
+        <h3 className="text-lg font-semibold mb-4">Add New Fiscal Year</h3>
+        <form onSubmit={handleSubmit}>
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Fiscal Year
+            </label>
+            <input
+              type="number"
+              value={year}
+              onChange={(e) => {
+                setYear(parseInt(e.target.value));
+                setError('');
+              }}
+              min={1900}
+              max={2100}
+              className="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-singtel-red"
+              autoFocus
+            />
+            {error && <p className="text-red-500 text-sm mt-1">{error}</p>}
+          </div>
+          <div className="flex justify-end gap-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 text-gray-600 hover:text-gray-900"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="px-4 py-2 bg-singtel-red text-white rounded-lg hover:bg-singtel-darkred"
+            >
+              Add Year
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export function Step2Confirm() {
   const { assessment, refreshAssessment } = useAssessment();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<TabType>('profit_loss');
   const [isConfirming, setIsConfirming] = useState(false);
   const [editingCell, setEditingCell] = useState<{ id: number; field: string } | null>(null);
+  const [showAddYearModal, setShowAddYearModal] = useState(false);
+  const [isAddingYear, setIsAddingYear] = useState(false);
 
   if (!assessment) return null;
 
   const sortedData = [...assessment.extracted_data].sort((a, b) => b.fiscal_year - a.fiscal_year);
+  const existingYears = sortedData.map(d => d.fiscal_year);
 
   const formatNumber = (value: number | undefined | null): string => {
     if (value === undefined || value === null) return '-';
     return value.toLocaleString();
   };
 
-  const handleCellEdit = async (dataId: number, field: string, value: string) => {
+  const handleCellEdit = async (dataId: number, field: string, value: string, fieldLabel: string) => {
+    // Allow empty string to clear the value
+    if (value.trim() === '' || value === '-') {
+      const loadingToast = toast.loading('Clearing value...');
+      try {
+        await api.updateFinancialData(assessment.id, dataId, { [field]: null });
+        refreshAssessment();
+        setEditingCell(null);
+        toast.success(`${fieldLabel} cleared`, { id: loadingToast });
+      } catch (error) {
+        toast.error('Failed to clear value', { id: loadingToast });
+      }
+      return;
+    }
+
     const numValue = parseFloat(value.replace(/,/g, ''));
     if (isNaN(numValue)) {
       toast.error('Please enter a valid number');
       return;
     }
 
+    const loadingToast = toast.loading('Saving...');
     try {
       await api.updateFinancialData(assessment.id, dataId, { [field]: numValue });
       refreshAssessment();
       setEditingCell(null);
-      toast.success('Value updated');
+      toast.success(`${fieldLabel} updated`, { id: loadingToast });
     } catch (error) {
-      toast.error('Failed to update value');
+      toast.error('Failed to update value', { id: loadingToast });
+    }
+  };
+
+  const handleAddYear = async (year: number) => {
+    setIsAddingYear(true);
+    const loadingToast = toast.loading(`Adding fiscal year ${year}...`);
+    try {
+      await api.createFinancialData(assessment.id, { fiscal_year: year });
+      refreshAssessment();
+      toast.success(`Fiscal year ${year} added successfully`, { id: loadingToast });
+    } catch (error: any) {
+      toast.error(error.response?.data?.detail || 'Failed to add fiscal year', { id: loadingToast });
+    } finally {
+      setIsAddingYear(false);
+    }
+  };
+
+  const handleDeleteYear = async (dataId: number, year: number) => {
+    if (!confirm(`Are you sure you want to delete fiscal year ${year}? This action cannot be undone.`)) {
+      return;
+    }
+
+    const loadingToast = toast.loading(`Deleting fiscal year ${year}...`);
+    try {
+      await api.deleteFinancialData(assessment.id, dataId);
+      refreshAssessment();
+      toast.success(`Fiscal year ${year} deleted successfully`, { id: loadingToast });
+    } catch (error) {
+      toast.error('Failed to delete fiscal year', { id: loadingToast });
     }
   };
 
@@ -47,15 +161,28 @@ export function Step2Confirm() {
     }
 
     setIsConfirming(true);
+    const loadingToast = toast.loading('Confirming financial data...');
     try {
       await api.confirmFinancialData(assessment.id);
       refreshAssessment();
+      toast.success('Financial data confirmed! Proceeding to ratios...', { id: loadingToast });
       navigate(`/assessment/${assessment.id}/step3`);
     } catch (error) {
-      toast.error('Failed to confirm data');
+      toast.error('Failed to confirm data', { id: loadingToast });
     } finally {
       setIsConfirming(false);
     }
+  };
+
+  const handleRefresh = () => {
+    toast.promise(
+      refreshAssessment(),
+      {
+        loading: 'Refreshing data...',
+        success: 'Data refreshed',
+        error: 'Failed to refresh data',
+      }
+    );
   };
 
   const balanceSheetFields = [
@@ -104,7 +231,7 @@ export function Step2Confirm() {
     }
   };
 
-  const renderCell = (data: ExtractedData, field: string) => {
+  const renderCell = (data: ExtractedData, field: string, fieldLabel: string) => {
     const value = data[field as keyof ExtractedData] as number | undefined;
     const confidence = data.confidence_scores?.[field];
     const isLowConfidence = confidence !== undefined && confidence < 0.8;
@@ -115,14 +242,15 @@ export function Step2Confirm() {
         <input
           type="text"
           defaultValue={value?.toString() || ''}
-          className="w-full px-2 py-1 border rounded focus:outline-none focus:ring-2 focus:ring-singtel-red"
+          className="w-full px-2 py-1 border rounded focus:outline-none focus:ring-2 focus:ring-singtel-red text-right"
           autoFocus
-          onBlur={(e) => handleCellEdit(data.id, field, e.target.value)}
+          onBlur={(e) => handleCellEdit(data.id, field, e.target.value, fieldLabel)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
-              handleCellEdit(data.id, field, (e.target as HTMLInputElement).value);
+              handleCellEdit(data.id, field, (e.target as HTMLInputElement).value, fieldLabel);
             } else if (e.key === 'Escape') {
               setEditingCell(null);
+              toast('Edit cancelled', { icon: '✖️' });
             }
           }}
         />
@@ -135,7 +263,7 @@ export function Step2Confirm() {
           isLowConfidence ? 'bg-yellow-50 border border-yellow-300' : ''
         }`}
         onClick={() => setEditingCell({ id: data.id, field })}
-        title={isLowConfidence ? `Low confidence: ${((confidence || 0) * 100).toFixed(0)}%` : 'Click to edit'}
+        title={isLowConfidence ? `Low confidence: ${((confidence || 0) * 100).toFixed(0)}% - Click to edit` : 'Click to edit'}
       >
         {formatNumber(value)}
       </div>
@@ -144,11 +272,23 @@ export function Step2Confirm() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-xl font-semibold text-gray-900">Confirm Extracted Financial Data</h2>
-        <p className="text-gray-500 mt-1">
-          Review extracted values and verify accuracy. Highlighted items require your confirmation.
-        </p>
+      <div className="flex justify-between items-start">
+        <div>
+          <h2 className="text-xl font-semibold text-gray-900">Confirm Extracted Financial Data</h2>
+          <p className="text-gray-500 mt-1">
+            Review and edit extracted values. Click any cell to edit. Highlighted items have low confidence.
+          </p>
+        </div>
+        <button
+          onClick={() => setShowAddYearModal(true)}
+          disabled={isAddingYear}
+          className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 font-medium flex items-center gap-2"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+          </svg>
+          Add Fiscal Year
+        </button>
       </div>
 
       {/* Tabs */}
@@ -157,7 +297,7 @@ export function Step2Confirm() {
           onClick={() => setActiveTab('balance_sheet')}
           className={`px-6 py-2 rounded-full font-medium transition-colors ${
             activeTab === 'balance_sheet'
-              ? 'bg-gray-200 text-gray-900'
+              ? 'bg-singtel-red text-white'
               : 'text-gray-500 hover:bg-gray-100'
           }`}
         >
@@ -177,7 +317,7 @@ export function Step2Confirm() {
           onClick={() => setActiveTab('cash_flow')}
           className={`px-6 py-2 rounded-full font-medium transition-colors ${
             activeTab === 'cash_flow'
-              ? 'bg-gray-200 text-gray-900'
+              ? 'bg-singtel-red text-white'
               : 'text-gray-500 hover:bg-gray-100'
           }`}
         >
@@ -188,13 +328,24 @@ export function Step2Confirm() {
       {/* Data Table */}
       {sortedData.length === 0 ? (
         <div className="bg-white border rounded-lg p-12 text-center">
-          <p className="text-gray-500">No financial data extracted yet. Please wait for processing to complete.</p>
-          <button
-            onClick={refreshAssessment}
-            className="mt-4 px-4 py-2 text-singtel-red hover:underline"
-          >
-            Refresh
-          </button>
+          <p className="text-gray-500 mb-4">No financial data available.</p>
+          <p className="text-gray-400 text-sm mb-4">
+            You can add fiscal years manually or wait for PDF processing to complete.
+          </p>
+          <div className="flex justify-center gap-4">
+            <button
+              onClick={() => setShowAddYearModal(true)}
+              className="px-4 py-2 bg-singtel-red text-white rounded-lg hover:bg-singtel-darkred"
+            >
+              Add Fiscal Year
+            </button>
+            <button
+              onClick={handleRefresh}
+              className="px-4 py-2 text-singtel-red hover:underline"
+            >
+              Refresh
+            </button>
+          </div>
         </div>
       ) : (
         <div className="bg-white border rounded-lg overflow-hidden">
@@ -204,7 +355,18 @@ export function Step2Confirm() {
                 <th className="px-6 py-3 text-left text-sm font-medium text-gray-700">Item</th>
                 {sortedData.map((data) => (
                   <th key={data.id} className="px-6 py-3 text-right text-sm font-medium text-gray-700">
-                    Dec {data.fiscal_year}
+                    <div className="flex items-center justify-end gap-2">
+                      <span>Dec {data.fiscal_year}</span>
+                      <button
+                        onClick={() => handleDeleteYear(data.id, data.fiscal_year)}
+                        className="text-gray-400 hover:text-red-500 p-1"
+                        title={`Delete fiscal year ${data.fiscal_year}`}
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
+                    </div>
                   </th>
                 ))}
               </tr>
@@ -215,7 +377,7 @@ export function Step2Confirm() {
                   <td className="px-6 py-4 text-sm text-gray-900 font-medium">{field.label}</td>
                   {sortedData.map((data) => (
                     <td key={data.id} className="px-6 py-4 text-sm text-gray-700 text-right">
-                      {renderCell(data, field.key)}
+                      {renderCell(data, field.key, field.label)}
                     </td>
                   ))}
                 </tr>
@@ -224,6 +386,20 @@ export function Step2Confirm() {
           </table>
         </div>
       )}
+
+      {/* Legend */}
+      <div className="flex items-center gap-4 text-sm text-gray-500">
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-4 bg-yellow-50 border border-yellow-300 rounded"></div>
+          <span>Low confidence value - review recommended</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+          </svg>
+          <span>Click any cell to edit</span>
+        </div>
+      </div>
 
       {/* Action Buttons */}
       <div className="flex justify-between pt-6 border-t">
@@ -241,6 +417,14 @@ export function Step2Confirm() {
           {isConfirming ? 'Confirming...' : 'Confirm & Calculate Ratios'}
         </button>
       </div>
+
+      {/* Add Year Modal */}
+      <AddYearModal
+        isOpen={showAddYearModal}
+        onClose={() => setShowAddYearModal(false)}
+        onSubmit={handleAddYear}
+        existingYears={existingYears}
+      />
     </div>
   );
 }
