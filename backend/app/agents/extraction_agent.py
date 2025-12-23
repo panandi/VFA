@@ -10,6 +10,7 @@ import logging
 from typing import Dict, Any, List
 from datetime import datetime
 from openai import AsyncOpenAI
+import httpx
 
 import pypdf
 
@@ -208,7 +209,15 @@ CRITICAL RULES:
 async def extract_with_llm(text: str) -> Dict[str, Any]:
     """Fast LLM extraction with improved prompts."""
     try:
-        client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        # Create HTTP client with SSL verification disabled for corporate proxy
+        http_client = httpx.AsyncClient(
+            verify=False,
+            timeout=httpx.Timeout(60.0, connect=10.0)
+        )
+        client = AsyncOpenAI(
+            api_key=settings.OPENAI_API_KEY,
+            http_client=http_client
+        )
 
         # Allow more text for better context
         if len(text) > 25000:

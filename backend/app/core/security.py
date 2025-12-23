@@ -21,9 +21,10 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def get_password_hash(password: str) -> str:
     """Generate password hash."""
+    # Using 12 rounds for good security/performance balance
     return bcrypt.hashpw(
         password.encode('utf-8'),
-        bcrypt.gensalt()
+        bcrypt.gensalt(rounds=12)
     ).decode('utf-8')
 
 

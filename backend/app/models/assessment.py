@@ -53,6 +53,7 @@ class VendorAssessment(Base):
     created_by_user = relationship("User", back_populates="assessments")
     financial_statements = relationship("FinancialStatement", back_populates="assessment", cascade="all, delete-orphan")
     extracted_data = relationship("ExtractedFinancialData", back_populates="assessment", cascade="all, delete-orphan")
+    line_items = relationship("FinancialLineItem", back_populates="assessment", cascade="all, delete-orphan")
     qualitative_responses = relationship("QualitativeResponse", back_populates="assessment", cascade="all, delete-orphan")
     risk_assessment = relationship("RiskAssessment", back_populates="assessment", uselist=False, cascade="all, delete-orphan")
     recommendation = relationship("Recommendation", back_populates="assessment", uselist=False, cascade="all, delete-orphan")

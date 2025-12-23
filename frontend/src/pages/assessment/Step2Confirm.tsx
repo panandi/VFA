@@ -1,11 +1,13 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAssessment } from '../../context/AssessmentContext';
 import { api } from '../../services/api';
 import { ExtractedData } from '../../types';
 import toast from 'react-hot-toast';
+import { HierarchicalDataView } from '../../components/HierarchicalDataView';
 
 type TabType = 'balance_sheet' | 'profit_loss' | 'cash_flow';
+type ViewMode = 'flat' | 'hierarchical';
 
 interface AddYearModalProps {
   isOpen: boolean;
@@ -78,6 +80,7 @@ export function Step2Confirm() {
   const { assessment, refreshAssessment } = useAssessment();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<TabType>('profit_loss');
+  const [viewMode, setViewMode] = useState<ViewMode>('hierarchical'); // Default to hierarchical
   const [isConfirming, setIsConfirming] = useState(false);
   const [editingCell, setEditingCell] = useState<{ id: number; field: string } | null>(null);
   const [showAddYearModal, setShowAddYearModal] = useState(false);
@@ -270,25 +273,62 @@ export function Step2Confirm() {
     );
   };
 
+  // Convert tab type to statement type for hierarchical view
+  const getStatementType = (tab: TabType): 'balance_sheet' | 'income_statement' | 'cash_flow' => {
+    if (tab === 'profit_loss') return 'income_statement';
+    return tab as 'balance_sheet' | 'cash_flow';
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-start">
         <div>
           <h2 className="text-xl font-semibold text-gray-900">Confirm Extracted Financial Data</h2>
           <p className="text-gray-500 mt-1">
-            Review and edit extracted values. Click any cell to edit. Highlighted items have low confidence.
+            {viewMode === 'hierarchical'
+              ? 'View all extracted financial data organized by hierarchy. Expand sections to see details.'
+              : 'Review and edit extracted values. Click any cell to edit. Highlighted items have low confidence.'
+            }
           </p>
         </div>
-        <button
-          onClick={() => setShowAddYearModal(true)}
-          disabled={isAddingYear}
-          className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 font-medium flex items-center gap-2"
-        >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-          </svg>
-          Add Fiscal Year
-        </button>
+        <div className="flex items-center gap-2">
+          {/* View Mode Toggle */}
+          <div className="flex bg-gray-100 rounded-lg p-1">
+            <button
+              onClick={() => setViewMode('hierarchical')}
+              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                viewMode === 'hierarchical'
+                  ? 'bg-white text-singtel-red shadow-sm'
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              Hierarchical
+            </button>
+            <button
+              onClick={() => setViewMode('flat')}
+              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                viewMode === 'flat'
+                  ? 'bg-white text-singtel-red shadow-sm'
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              Flat
+            </button>
+          </div>
+
+          {viewMode === 'flat' && (
+            <button
+              onClick={() => setShowAddYearModal(true)}
+              disabled={isAddingYear}
+              className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 font-medium flex items-center gap-2"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+              Add Fiscal Year
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Tabs */}
@@ -325,81 +365,91 @@ export function Step2Confirm() {
         </button>
       </div>
 
-      {/* Data Table */}
-      {sortedData.length === 0 ? (
-        <div className="bg-white border rounded-lg p-12 text-center">
-          <p className="text-gray-500 mb-4">No financial data available.</p>
-          <p className="text-gray-400 text-sm mb-4">
-            You can add fiscal years manually or wait for PDF processing to complete.
-          </p>
-          <div className="flex justify-center gap-4">
-            <button
-              onClick={() => setShowAddYearModal(true)}
-              className="px-4 py-2 bg-singtel-red text-white rounded-lg hover:bg-singtel-darkred"
-            >
-              Add Fiscal Year
-            </button>
-            <button
-              onClick={handleRefresh}
-              className="px-4 py-2 text-singtel-red hover:underline"
-            >
-              Refresh
-            </button>
-          </div>
-        </div>
+      {/* Data View - Hierarchical or Flat */}
+      {viewMode === 'hierarchical' ? (
+        <HierarchicalDataView
+          assessmentId={assessment.id}
+          activeTab={getStatementType(activeTab)}
+        />
       ) : (
-        <div className="bg-white border rounded-lg overflow-hidden">
-          <table className="w-full">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-6 py-3 text-left text-sm font-medium text-gray-700">Item</th>
-                {sortedData.map((data) => (
-                  <th key={data.id} className="px-6 py-3 text-right text-sm font-medium text-gray-700">
-                    <div className="flex items-center justify-end gap-2">
-                      <span>Dec {data.fiscal_year}</span>
-                      <button
-                        onClick={() => handleDeleteYear(data.id, data.fiscal_year)}
-                        className="text-gray-400 hover:text-red-500 p-1"
-                        title={`Delete fiscal year ${data.fiscal_year}`}
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                        </svg>
-                      </button>
-                    </div>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200">
-              {getActiveFields().map((field) => (
-                <tr key={field.key} className="hover:bg-gray-50">
-                  <td className="px-6 py-4 text-sm text-gray-900 font-medium">{field.label}</td>
+        // Flat View (Original)
+        sortedData.length === 0 ? (
+          <div className="bg-white border rounded-lg p-12 text-center">
+            <p className="text-gray-500 mb-4">No financial data available.</p>
+            <p className="text-gray-400 text-sm mb-4">
+              You can add fiscal years manually or wait for PDF processing to complete.
+            </p>
+            <div className="flex justify-center gap-4">
+              <button
+                onClick={() => setShowAddYearModal(true)}
+                className="px-4 py-2 bg-singtel-red text-white rounded-lg hover:bg-singtel-darkred"
+              >
+                Add Fiscal Year
+              </button>
+              <button
+                onClick={handleRefresh}
+                className="px-4 py-2 text-singtel-red hover:underline"
+              >
+                Refresh
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="bg-white border rounded-lg overflow-hidden">
+            <table className="w-full">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-sm font-medium text-gray-700">Item</th>
                   {sortedData.map((data) => (
-                    <td key={data.id} className="px-6 py-4 text-sm text-gray-700 text-right">
-                      {renderCell(data, field.key, field.label)}
-                    </td>
+                    <th key={data.id} className="px-6 py-3 text-right text-sm font-medium text-gray-700">
+                      <div className="flex items-center justify-end gap-2">
+                        <span>Dec {data.fiscal_year}</span>
+                        <button
+                          onClick={() => handleDeleteYear(data.id, data.fiscal_year)}
+                          className="text-gray-400 hover:text-red-500 p-1"
+                          title={`Delete fiscal year ${data.fiscal_year}`}
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          </svg>
+                        </button>
+                      </div>
+                    </th>
                   ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-gray-200">
+                {getActiveFields().map((field) => (
+                  <tr key={field.key} className="hover:bg-gray-50">
+                    <td className="px-6 py-4 text-sm text-gray-900 font-medium">{field.label}</td>
+                    {sortedData.map((data) => (
+                      <td key={data.id} className="px-6 py-4 text-sm text-gray-700 text-right">
+                        {renderCell(data, field.key, field.label)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
       )}
 
-      {/* Legend */}
-      <div className="flex items-center gap-4 text-sm text-gray-500">
-        <div className="flex items-center gap-2">
-          <div className="w-4 h-4 bg-yellow-50 border border-yellow-300 rounded"></div>
-          <span>Low confidence value - review recommended</span>
+      {/* Legend - Only show in flat view */}
+      {viewMode === 'flat' && (
+        <div className="flex items-center gap-4 text-sm text-gray-500">
+          <div className="flex items-center gap-2">
+            <div className="w-4 h-4 bg-yellow-50 border border-yellow-300 rounded"></div>
+            <span>Low confidence value - review recommended</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+            </svg>
+            <span>Click any cell to edit</span>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-          </svg>
-          <span>Click any cell to edit</span>
-        </div>
-      </div>
+      )}
 
       {/* Action Buttons */}
       <div className="flex justify-between pt-6 border-t">

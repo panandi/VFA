@@ -7,6 +7,7 @@ from app.models.assessment import (
     RiskAssessment,
     Recommendation
 )
+from app.models.financial_line_item import FinancialLineItem
 
 __all__ = [
     "User",
@@ -15,5 +16,6 @@ __all__ = [
     "ExtractedFinancialData",
     "QualitativeResponse",
     "RiskAssessment",
-    "Recommendation"
+    "Recommendation",
+    "FinancialLineItem"
 ]

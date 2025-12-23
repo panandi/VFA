@@ -21,6 +21,7 @@ from app.models.assessment import (
     Recommendation,
     AssessmentStatus
 )
+from app.models.financial_line_item import FinancialLineItem
 from app.schemas.assessment import (
     AssessmentCreate,
     AssessmentUpdate,
@@ -35,10 +36,14 @@ from app.services.financial_calculator import FinancialCalculator, CompanyType
 from app.agents.extraction_agent_optimized import run_extraction_pipeline as run_extraction_v1
 from app.agents.extraction_agent_optimized import extraction_progress as extraction_progress_v1
 from app.agents.extraction_agent_v2 import run_extraction_pipeline_v2, extraction_progress as extraction_progress_v2
+from app.agents.camelot_integration_agent import run_camelot_extraction
+from app.agents.hybrid_extraction_agent import run_hybrid_extraction
 from app.agents.recommendation_agent import generate_recommendation
 
-# Use v2 by default (supports OCR for scanned PDFs)
-USE_EXTRACTION_V2 = True
+# Use Hybrid extraction by default (Tries Camelot first, falls back to LLM)
+USE_HYBRID = True  # Best of both: Camelot for text PDFs, LLM for image PDFs
+USE_CAMELOT = False
+USE_EXTRACTION_V2 = False
 
 router = APIRouter(prefix="/assessments", tags=["Assessments"])
 
@@ -252,8 +257,26 @@ async def upload_financial_statement(
     db.refresh(statement)
 
     # Trigger extraction in background
-    # Use v2 extraction (with OCR support) by default
-    if USE_EXTRACTION_V2:
+    if USE_HYBRID:
+        # Use Hybrid extraction (Tries Camelot first, falls back to LLM)
+        # - Text PDFs → Camelot → Hierarchical data
+        # - Image PDFs → LLM → Flat data
+        background_tasks.add_task(
+            run_hybrid_extraction,
+            assessment_id=assessment_id,
+            statement_id=statement.id,
+            file_path=file_path
+        )
+    elif USE_CAMELOT:
+        # Use Camelot extraction only (No LLM, extracts ALL data)
+        background_tasks.add_task(
+            run_camelot_extraction,
+            assessment_id=assessment_id,
+            statement_id=statement.id,
+            file_path=file_path
+        )
+    elif USE_EXTRACTION_V2:
+        # Use LLM v2 extraction (with OCR support)
         background_tasks.add_task(
             run_extraction_pipeline_v2,
             assessment_id=assessment_id,
@@ -261,6 +284,7 @@ async def upload_financial_statement(
             file_path=file_path
         )
     else:
+        # Use LLM v1 extraction
         background_tasks.add_task(
             run_extraction_v1,
             assessment_id=assessment_id,
@@ -931,6 +955,287 @@ async def sign_off_assessment(
         "message": "Assessment signed off successfully",
         "assessment_id": assessment_id,
         "signed_off_at": assessment.recommendation.signed_off_at
+    }
+
+
+# Get all line items for an assessment
+@router.get("/{assessment_id}/line-items")
+async def get_line_items(
+    assessment_id: int,
+    fiscal_year: int = None,
+    statement_type: str = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get all extracted line items for an assessment.
+
+    Optional filters:
+    - fiscal_year: Filter by specific fiscal year
+    - statement_type: Filter by statement type (balance_sheet, income_statement, cash_flow)
+    """
+    assessment = (
+        db.query(VendorAssessment)
+        .filter(
+            VendorAssessment.id == assessment_id,
+            VendorAssessment.created_by == current_user.id
+        )
+        .first()
+    )
+
+    if not assessment:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assessment not found"
+        )
+
+    # Build query
+    query = db.query(FinancialLineItem).filter(
+        FinancialLineItem.assessment_id == assessment_id
+    )
+
+    # Apply filters
+    if fiscal_year:
+        query = query.filter(FinancialLineItem.fiscal_year == fiscal_year)
+
+    if statement_type:
+        query = query.filter(FinancialLineItem.statement_type == statement_type)
+
+    # Order by year, statement type, and level
+    line_items = query.order_by(
+        FinancialLineItem.fiscal_year.desc(),
+        FinancialLineItem.statement_type,
+        FinancialLineItem.level,
+        FinancialLineItem.line_item_text
+    ).all()
+
+    return {
+        "assessment_id": assessment_id,
+        "total_items": len(line_items),
+        "line_items": [item.to_dict() for item in line_items]
+    }
+
+
+# Get hierarchical financial data
+@router.get("/{assessment_id}/hierarchical-data")
+async def get_hierarchical_data(
+    assessment_id: int,
+    fiscal_year: int = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get financial data organized in hierarchical tree structure.
+    Shows breakdown of totals into sub-categories and line items.
+
+    Example:
+    - Total Assets (level 0)
+      - Current Assets (level 1)
+        - Cash and Equivalents (level 2)
+        - Accounts Receivable (level 2)
+      - Non-Current Assets (level 1)
+    """
+    assessment = (
+        db.query(VendorAssessment)
+        .filter(
+            VendorAssessment.id == assessment_id,
+            VendorAssessment.created_by == current_user.id
+        )
+        .first()
+    )
+
+    if not assessment:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assessment not found"
+        )
+
+    # Get all line items
+    query = db.query(FinancialLineItem).filter(
+        FinancialLineItem.assessment_id == assessment_id
+    )
+
+    if fiscal_year:
+        query = query.filter(FinancialLineItem.fiscal_year == fiscal_year)
+
+    line_items = query.order_by(
+        FinancialLineItem.fiscal_year.desc(),
+        FinancialLineItem.statement_type,
+        FinancialLineItem.level,
+        FinancialLineItem.line_item_text
+    ).all()
+
+    # Get all fiscal years
+    all_years = sorted(set(item.fiscal_year for item in line_items), reverse=True)
+
+    # Build hierarchical structure
+    def build_tree(items, parent_canonical=None, current_level=0):
+        """Recursively build tree structure"""
+        tree = []
+
+        # Get items at current level with matching parent
+        current_items = [
+            item for item in items
+            if item.level == current_level and item.parent_canonical_name == parent_canonical
+        ]
+
+        for item in current_items:
+            # Group values by year
+            values_by_year = {}
+            for year_item in items:
+                if year_item.canonical_name == item.canonical_name:
+                    values_by_year[year_item.fiscal_year] = year_item.value
+
+            # Build node
+            node = {
+                "line_item": item.line_item_text,
+                "canonical_name": item.canonical_name,
+                "category": item.category,
+                "level": item.level,
+                "values": values_by_year,
+                "statement_type": item.statement_type,
+                "confidence": item.confidence,
+                "children": []
+            }
+
+            # Recursively get children
+            if item.canonical_name:
+                children = build_tree(items, item.canonical_name, current_level + 1)
+                node["children"] = children
+
+            tree.append(node)
+
+        return tree
+
+    # Organize by statement type
+    hierarchical_data = {
+        "assessment_id": assessment_id,
+        "fiscal_years": all_years,
+        "statements": {
+            "balance_sheet": build_tree(
+                [item for item in line_items if item.statement_type == "balance_sheet"]
+            ),
+            "income_statement": build_tree(
+                [item for item in line_items if item.statement_type == "income_statement"]
+            ),
+            "cash_flow": build_tree(
+                [item for item in line_items if item.statement_type == "cash_flow"]
+            )
+        }
+    }
+
+    return hierarchical_data
+
+
+# Get breakdown for specific line item
+@router.get("/{assessment_id}/line-items/breakdown/{canonical_name}")
+async def get_line_item_breakdown(
+    assessment_id: int,
+    canonical_name: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get the breakdown (children) of a specific line item.
+
+    Example:
+    - canonical_name = "total_assets"
+    - Returns: current_assets, non_current_assets, and their children
+    """
+    assessment = (
+        db.query(VendorAssessment)
+        .filter(
+            VendorAssessment.id == assessment_id,
+            VendorAssessment.created_by == current_user.id
+        )
+        .first()
+    )
+
+    if not assessment:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assessment not found"
+        )
+
+    # Get the parent item
+    parent_items = (
+        db.query(FinancialLineItem)
+        .filter(
+            FinancialLineItem.assessment_id == assessment_id,
+            FinancialLineItem.canonical_name == canonical_name
+        )
+        .order_by(FinancialLineItem.fiscal_year.desc())
+        .all()
+    )
+
+    if not parent_items:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Line item '{canonical_name}' not found"
+        )
+
+    # Get parent values by year
+    parent_values = {item.fiscal_year: item.value for item in parent_items}
+    parent_info = parent_items[0]  # Use most recent for metadata
+
+    # Get all children (direct and nested)
+    def get_all_children(parent_canonical, level_offset=0):
+        """Recursively get all children"""
+        children = []
+
+        # Get direct children
+        direct_children = (
+            db.query(FinancialLineItem)
+            .filter(
+                FinancialLineItem.assessment_id == assessment_id,
+                FinancialLineItem.parent_canonical_name == parent_canonical
+            )
+            .order_by(
+                FinancialLineItem.fiscal_year.desc(),
+                FinancialLineItem.level,
+                FinancialLineItem.line_item_text
+            )
+            .all()
+        )
+
+        # Group by canonical name to consolidate years
+        items_by_canonical = {}
+        for item in direct_children:
+            if item.canonical_name not in items_by_canonical:
+                items_by_canonical[item.canonical_name] = {
+                    "line_item": item.line_item_text,
+                    "canonical_name": item.canonical_name,
+                    "category": item.category,
+                    "level": item.level - parent_info.level - 1 + level_offset,  # Relative level
+                    "values": {},
+                    "statement_type": item.statement_type,
+                    "confidence": item.confidence,
+                    "children": []
+                }
+            items_by_canonical[item.canonical_name]["values"][item.fiscal_year] = item.value
+
+        # Get nested children
+        for canonical, item_data in items_by_canonical.items():
+            nested_children = get_all_children(canonical, level_offset)
+            item_data["children"] = nested_children
+            children.append(item_data)
+
+        return children
+
+    children = get_all_children(canonical_name)
+
+    return {
+        "assessment_id": assessment_id,
+        "parent": {
+            "line_item": parent_info.line_item_text,
+            "canonical_name": parent_info.canonical_name,
+            "category": parent_info.category,
+            "level": parent_info.level,
+            "values": parent_values,
+            "statement_type": parent_info.statement_type
+        },
+        "breakdown": children,
+        "total_children": len(children)
     }
 
 

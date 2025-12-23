@@ -163,6 +163,56 @@ class ApiService {
     return response.data;
   }
 
+  // Hierarchical Data (Camelot extraction)
+  async getLineItems(
+    assessmentId: number,
+    fiscalYear?: number,
+    statementType?: string
+  ): Promise<{
+    assessment_id: number;
+    total_items: number;
+    line_items: any[];
+  }> {
+    const params = new URLSearchParams();
+    if (fiscalYear) params.append('fiscal_year', fiscalYear.toString());
+    if (statementType) params.append('statement_type', statementType);
+
+    const response = await this.client.get(`/assessments/${assessmentId}/line-items?${params}`);
+    return response.data;
+  }
+
+  async getHierarchicalData(
+    assessmentId: number,
+    fiscalYear?: number
+  ): Promise<{
+    assessment_id: number;
+    fiscal_years: number[];
+    statements: {
+      balance_sheet: any[];
+      income_statement: any[];
+      cash_flow: any[];
+    };
+  }> {
+    const params = fiscalYear ? `?fiscal_year=${fiscalYear}` : '';
+    const response = await this.client.get(`/assessments/${assessmentId}/hierarchical-data${params}`);
+    return response.data;
+  }
+
+  async getLineItemBreakdown(
+    assessmentId: number,
+    canonicalName: string
+  ): Promise<{
+    assessment_id: number;
+    parent: any;
+    breakdown: any[];
+    total_children: number;
+  }> {
+    const response = await this.client.get(
+      `/assessments/${assessmentId}/line-items/breakdown/${canonicalName}`
+    );
+    return response.data;
+  }
+
   // Qualitative Responses
   async updateQualitativeResponse(
     assessmentId: number,

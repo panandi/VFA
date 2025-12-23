@@ -6,6 +6,7 @@ Generates AI-powered recommendations based on financial analysis.
 import json
 from typing import Dict, Any, List
 from openai import AsyncOpenAI
+import httpx
 
 from app.core.config import settings
 from app.models.assessment import VendorAssessment, RiskAssessment, QualitativeResponse
@@ -306,7 +307,15 @@ Please analyze:
 
 Based on this comprehensive analysis, provide your recommendation with specific supporting factors."""
 
-    client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+    # Create HTTP client with SSL verification disabled for corporate proxy
+    http_client = httpx.AsyncClient(
+        verify=False,
+        timeout=httpx.Timeout(60.0, connect=10.0)
+    )
+    client = AsyncOpenAI(
+        api_key=settings.OPENAI_API_KEY,
+        http_client=http_client
+    )
 
     try:
         response = await client.chat.completions.create(

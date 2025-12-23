@@ -25,6 +25,7 @@ from typing import Dict, Any, List, Tuple, Optional
 from datetime import datetime
 from dataclasses import dataclass, field, asdict
 from openai import AsyncOpenAI
+import httpx
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -255,7 +256,16 @@ class ExtractionPipelineV2:
         self.finder = PageFinder(self.processor)
         self.table_extractor = TableExtractor()
         self.field_mapper = FieldMapper()
-        self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+
+        # Create HTTP client with SSL verification disabled for corporate proxy
+        http_client = httpx.AsyncClient(
+            verify=False,
+            timeout=httpx.Timeout(60.0, connect=10.0)
+        )
+        self.client = AsyncOpenAI(
+            api_key=settings.OPENAI_API_KEY,
+            http_client=http_client
+        )
 
         # Results
         self.pdf_info: Optional[PDFInfo] = None

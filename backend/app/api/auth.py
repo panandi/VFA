@@ -29,8 +29,8 @@ async def register(user_data: UserCreate, db: Session = Depends(get_db)):
         )
 
     # Create initials from full name
-    name_parts = user_data.full_name.split()
-    initials = "".join([part[0].upper() for part in name_parts[:2]])
+    name_parts = [part for part in user_data.full_name.split() if part]
+    initials = "".join([part[0].upper() for part in name_parts[:2]]) if name_parts else ""
 
     # Create new user
     user = User(

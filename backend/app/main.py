@@ -12,6 +12,8 @@ import logging
 from app.core.config import settings
 from app.core.database import engine, Base
 from app.api import auth, assessments
+# Import all models to ensure tables are created
+from app.models import User, VendorAssessment, FinancialStatement, ExtractedFinancialData, QualitativeResponse, RiskAssessment, Recommendation
 
 # Configure logging
 logging.basicConfig(
@@ -53,6 +55,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # Include routers
