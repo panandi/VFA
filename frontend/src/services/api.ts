@@ -213,6 +213,19 @@ class ApiService {
     return response.data;
   }
 
+  async getAIOrganizedData(assessmentId: number): Promise<{
+    success: boolean;
+    error?: string;
+    organized_data: any;
+    display_items: any[];
+    fiscal_years: number[];
+    total_source_items?: number;
+    model_used?: string;
+  }> {
+    const response = await this.client.get(`/assessments/${assessmentId}/ai-organized-data`);
+    return response.data;
+  }
+
   // Qualitative Responses
   async updateQualitativeResponse(
     assessmentId: number,

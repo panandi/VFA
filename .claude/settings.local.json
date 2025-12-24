@@ -28,7 +28,14 @@
       "Bash(./venv/Scripts/pip:*)",
       "Bash(done)",
       "Bash(dir:*)",
-      "Bash(npm run build:*)"
+      "Bash(npm run build:*)",
+      "Bash(source:*)",
+      "Bash(brew list:*)",
+      "Bash(brew install:*)",
+      "Bash(pip freeze:*)",
+      "Bash(python3:*)",
+      "Bash(./venv/bin/python -c \"from app.agents.financial_organizer_agent import organize_financial_data; print\\(''Import successful''\\)\")",
+      "Bash(./venv/bin/python:*)"
     ]
   }
 }

@@ -5,9 +5,10 @@ import { api } from '../../services/api';
 import { ExtractedData } from '../../types';
 import toast from 'react-hot-toast';
 import { HierarchicalDataView } from '../../components/HierarchicalDataView';
+import { AIOrganizedView } from '../../components/AIOrganizedView';
 
 type TabType = 'balance_sheet' | 'profit_loss' | 'cash_flow';
-type ViewMode = 'flat' | 'hierarchical';
+type ViewMode = 'flat' | 'hierarchical' | 'ai_organized';
 
 interface AddYearModalProps {
   isOpen: boolean;
@@ -285,7 +286,9 @@ export function Step2Confirm() {
         <div>
           <h2 className="text-xl font-semibold text-gray-900">Confirm Extracted Financial Data</h2>
           <p className="text-gray-500 mt-1">
-            {viewMode === 'hierarchical'
+            {viewMode === 'ai_organized'
+              ? 'AI-organized view with standardized financial terminology and proper categorization.'
+              : viewMode === 'hierarchical'
               ? 'View all extracted financial data organized by hierarchy. Expand sections to see details.'
               : 'Review and edit extracted values. Click any cell to edit. Highlighted items have low confidence.'
             }
@@ -294,6 +297,19 @@ export function Step2Confirm() {
         <div className="flex items-center gap-2">
           {/* View Mode Toggle */}
           <div className="flex bg-gray-100 rounded-lg p-1">
+            <button
+              onClick={() => setViewMode('ai_organized')}
+              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1 ${
+                viewMode === 'ai_organized'
+                  ? 'bg-gradient-to-r from-singtel-red to-red-600 text-white shadow-sm'
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+              </svg>
+              AI Organized
+            </button>
             <button
               onClick={() => setViewMode('hierarchical')}
               className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
@@ -331,42 +347,46 @@ export function Step2Confirm() {
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="flex space-x-2">
-        <button
-          onClick={() => setActiveTab('balance_sheet')}
-          className={`px-6 py-2 rounded-full font-medium transition-colors ${
-            activeTab === 'balance_sheet'
-              ? 'bg-singtel-red text-white'
-              : 'text-gray-500 hover:bg-gray-100'
-          }`}
-        >
-          Balance Sheet
-        </button>
-        <button
-          onClick={() => setActiveTab('profit_loss')}
-          className={`px-6 py-2 rounded-full font-medium transition-colors ${
-            activeTab === 'profit_loss'
-              ? 'bg-singtel-red text-white'
-              : 'text-gray-500 hover:bg-gray-100'
-          }`}
-        >
-          Profit & Loss
-        </button>
-        <button
-          onClick={() => setActiveTab('cash_flow')}
-          className={`px-6 py-2 rounded-full font-medium transition-colors ${
-            activeTab === 'cash_flow'
-              ? 'bg-singtel-red text-white'
-              : 'text-gray-500 hover:bg-gray-100'
-          }`}
-        >
-          Cash Flow
-        </button>
-      </div>
+      {/* Tabs - Hidden in AI Organized mode */}
+      {viewMode !== 'ai_organized' && (
+        <div className="flex space-x-2">
+          <button
+            onClick={() => setActiveTab('balance_sheet')}
+            className={`px-6 py-2 rounded-full font-medium transition-colors ${
+              activeTab === 'balance_sheet'
+                ? 'bg-singtel-red text-white'
+                : 'text-gray-500 hover:bg-gray-100'
+            }`}
+          >
+            Balance Sheet
+          </button>
+          <button
+            onClick={() => setActiveTab('profit_loss')}
+            className={`px-6 py-2 rounded-full font-medium transition-colors ${
+              activeTab === 'profit_loss'
+                ? 'bg-singtel-red text-white'
+                : 'text-gray-500 hover:bg-gray-100'
+            }`}
+          >
+            Profit & Loss
+          </button>
+          <button
+            onClick={() => setActiveTab('cash_flow')}
+            className={`px-6 py-2 rounded-full font-medium transition-colors ${
+              activeTab === 'cash_flow'
+                ? 'bg-singtel-red text-white'
+                : 'text-gray-500 hover:bg-gray-100'
+            }`}
+          >
+            Cash Flow
+          </button>
+        </div>
+      )}
 
-      {/* Data View - Hierarchical or Flat */}
-      {viewMode === 'hierarchical' ? (
+      {/* Data View - AI Organized, Hierarchical, or Flat */}
+      {viewMode === 'ai_organized' ? (
+        <AIOrganizedView assessmentId={assessment.id} />
+      ) : viewMode === 'hierarchical' ? (
         <HierarchicalDataView
           assessmentId={assessment.id}
           activeTab={getStatementType(activeTab)}

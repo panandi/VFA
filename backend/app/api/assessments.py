@@ -32,18 +32,10 @@ from app.schemas.assessment import (
     QualitativeResponseUpdate
 )
 from app.services.financial_calculator import FinancialCalculator, CompanyType
-# Extraction agents - v2 is the new default with OCR support
-from app.agents.extraction_agent_optimized import run_extraction_pipeline as run_extraction_v1
-from app.agents.extraction_agent_optimized import extraction_progress as extraction_progress_v1
-from app.agents.extraction_agent_v2 import run_extraction_pipeline_v2, extraction_progress as extraction_progress_v2
+# Camelot-only extraction (no LLM)
 from app.agents.camelot_integration_agent import run_camelot_extraction
-from app.agents.hybrid_extraction_agent import run_hybrid_extraction
 from app.agents.recommendation_agent import generate_recommendation
-
-# Use Hybrid extraction by default (Tries Camelot first, falls back to LLM)
-USE_HYBRID = True  # Best of both: Camelot for text PDFs, LLM for image PDFs
-USE_CAMELOT = False
-USE_EXTRACTION_V2 = False
+from app.agents.financial_organizer_agent import organize_financial_data
 
 router = APIRouter(prefix="/assessments", tags=["Assessments"])
 
@@ -256,41 +248,13 @@ async def upload_financial_statement(
     db.commit()
     db.refresh(statement)
 
-    # Trigger extraction in background
-    if USE_HYBRID:
-        # Use Hybrid extraction (Tries Camelot first, falls back to LLM)
-        # - Text PDFs → Camelot → Hierarchical data
-        # - Image PDFs → LLM → Flat data
-        background_tasks.add_task(
-            run_hybrid_extraction,
-            assessment_id=assessment_id,
-            statement_id=statement.id,
-            file_path=file_path
-        )
-    elif USE_CAMELOT:
-        # Use Camelot extraction only (No LLM, extracts ALL data)
-        background_tasks.add_task(
-            run_camelot_extraction,
-            assessment_id=assessment_id,
-            statement_id=statement.id,
-            file_path=file_path
-        )
-    elif USE_EXTRACTION_V2:
-        # Use LLM v2 extraction (with OCR support)
-        background_tasks.add_task(
-            run_extraction_pipeline_v2,
-            assessment_id=assessment_id,
-            statement_id=statement.id,
-            file_path=file_path
-        )
-    else:
-        # Use LLM v1 extraction
-        background_tasks.add_task(
-            run_extraction_v1,
-            assessment_id=assessment_id,
-            statement_id=statement.id,
-            file_path=file_path
-        )
+    # Trigger Camelot extraction in background (no LLM)
+    background_tasks.add_task(
+        run_camelot_extraction,
+        assessment_id=assessment_id,
+        statement_id=statement.id,
+        file_path=file_path
+    )
 
     return {
         "message": "File uploaded successfully",
@@ -307,8 +271,6 @@ async def get_extraction_status(
     current_user: User = Depends(get_current_user)
 ):
     """Get the status of PDF extraction for an assessment."""
-    import time
-
     assessment = (
         db.query(VendorAssessment)
         .filter(
@@ -341,22 +303,12 @@ async def get_extraction_status(
         .count()
     )
 
-    # Get real-time progress from extraction agent (check both v1 and v2)
-    progress_info = extraction_progress_v2.get(assessment_id, {}) or extraction_progress_v1.get(assessment_id, {})
-    current_page = progress_info.get('current_page', 0)
-    total_pages = progress_info.get('total_pages', 0)
-    statement_type = progress_info.get('statement_type', '')
-    stage = progress_info.get('stage', '')
-
-    # Calculate time remaining
-    time_remaining_seconds = None
-    if progress_info and current_page > 0 and total_pages > 0:
-        start_time = progress_info.get('start_time', time.time())
-        elapsed = time.time() - start_time
-        progress_ratio = current_page / total_pages
-        if progress_ratio > 0:
-            estimated_total_time = elapsed / progress_ratio
-            time_remaining_seconds = max(0, int(estimated_total_time - elapsed))
+    # Check line items count (Camelot extraction)
+    line_items_count = (
+        db.query(FinancialLineItem)
+        .filter(FinancialLineItem.assessment_id == assessment_id)
+        .count()
+    )
 
     return {
         "total_files": total,
@@ -364,12 +316,8 @@ async def get_extraction_status(
         "is_complete": processed == total and total > 0,
         "has_errors": has_errors,
         "extracted_years": extracted_count,
-        "status": "complete" if (processed == total and total > 0) else "processing" if total > 0 else "pending",
-        "current_page": current_page,
-        "total_pages": total_pages,
-        "statement_type": statement_type,
-        "stage": stage,
-        "time_remaining_seconds": time_remaining_seconds
+        "line_items_count": line_items_count,
+        "status": "complete" if (processed == total and total > 0) else "processing" if total > 0 else "pending"
     }
 
 
@@ -407,20 +355,12 @@ async def trigger_extraction(
     )
 
     for statement in pending_statements:
-        if USE_EXTRACTION_V2:
-            background_tasks.add_task(
-                run_extraction_pipeline_v2,
-                assessment_id=assessment_id,
-                statement_id=statement.id,
-                file_path=statement.file_path
-            )
-        else:
-            background_tasks.add_task(
-                run_extraction_v1,
-                assessment_id=assessment_id,
-                statement_id=statement.id,
-                file_path=statement.file_path
-            )
+        background_tasks.add_task(
+            run_camelot_extraction,
+            assessment_id=assessment_id,
+            statement_id=statement.id,
+            file_path=statement.file_path
+        )
 
     return {"message": f"Extraction triggered for {len(pending_statements)} files"}
 
@@ -1025,15 +965,8 @@ async def get_hierarchical_data(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Get financial data organized in hierarchical tree structure.
-    Shows breakdown of totals into sub-categories and line items.
-
-    Example:
-    - Total Assets (level 0)
-      - Current Assets (level 1)
-        - Cash and Equivalents (level 2)
-        - Accounts Receivable (level 2)
-      - Non-Current Assets (level 1)
+    Get financial data organized by statement type.
+    Returns ALL extracted line items grouped by statement type.
     """
     assessment = (
         db.query(VendorAssessment)
@@ -1068,63 +1001,169 @@ async def get_hierarchical_data(
     # Get all fiscal years
     all_years = sorted(set(item.fiscal_year for item in line_items), reverse=True)
 
-    # Build hierarchical structure
-    def build_tree(items, parent_canonical=None, current_level=0):
-        """Recursively build tree structure"""
-        tree = []
+    # Group items by line_item_text (or canonical_name) to consolidate years
+    def consolidate_items(items):
+        """Group items by text and consolidate values across years"""
+        consolidated = {}
 
-        # Get items at current level with matching parent
-        current_items = [
-            item for item in items
-            if item.level == current_level and item.parent_canonical_name == parent_canonical
-        ]
+        for item in items:
+            # Use canonical_name if available, otherwise use line_item_text
+            key = item.canonical_name or item.line_item_text.lower().strip()
 
-        for item in current_items:
-            # Group values by year
-            values_by_year = {}
-            for year_item in items:
-                if year_item.canonical_name == item.canonical_name:
-                    values_by_year[year_item.fiscal_year] = year_item.value
+            if key not in consolidated:
+                consolidated[key] = {
+                    "line_item": item.line_item_text,
+                    "canonical_name": item.canonical_name,
+                    "category": item.category,
+                    "level": item.level,
+                    "values": {},
+                    "statement_type": item.statement_type,
+                    "confidence": item.confidence,
+                    "parent_canonical_name": item.parent_canonical_name,
+                    "children": []
+                }
 
-            # Build node
-            node = {
-                "line_item": item.line_item_text,
-                "canonical_name": item.canonical_name,
-                "category": item.category,
-                "level": item.level,
-                "values": values_by_year,
-                "statement_type": item.statement_type,
-                "confidence": item.confidence,
-                "children": []
-            }
+            # Add value for this year
+            consolidated[key]["values"][item.fiscal_year] = item.value
 
-            # Recursively get children
-            if item.canonical_name:
-                children = build_tree(items, item.canonical_name, current_level + 1)
-                node["children"] = children
+            # Keep highest confidence
+            if item.confidence > consolidated[key]["confidence"]:
+                consolidated[key]["confidence"] = item.confidence
 
-            tree.append(node)
+        return list(consolidated.values())
 
-        return tree
+    # Build flat list with optional hierarchy for items that have it
+    def build_display_list(items):
+        """Build display list - flat with indentation hints"""
+        consolidated = consolidate_items(items)
+
+        # First, try to build hierarchy for items with parent relationships
+        items_with_parents = [i for i in consolidated if i["parent_canonical_name"]]
+        items_without_parents = [i for i in consolidated if not i["parent_canonical_name"]]
+
+        # Add children to parents where possible
+        for item in items_without_parents:
+            if item["canonical_name"]:
+                children = [
+                    c for c in items_with_parents
+                    if c["parent_canonical_name"] == item["canonical_name"]
+                ]
+                item["children"] = children
+
+        # Return all items without parents as root items
+        # (items with parents are now nested inside their parents)
+        result = []
+        added_keys = set()
+
+        for item in items_without_parents:
+            result.append(item)
+            added_keys.add(item["canonical_name"] or item["line_item"])
+            # Mark children as added
+            for child in item.get("children", []):
+                added_keys.add(child["canonical_name"] or child["line_item"])
+
+        # Add any orphaned items (have parent but parent not found)
+        for item in items_with_parents:
+            key = item["canonical_name"] or item["line_item"]
+            if key not in added_keys:
+                result.append(item)
+
+        return result
+
+    # Get items by statement type
+    bs_items = [item for item in line_items if item.statement_type == "balance_sheet"]
+    is_items = [item for item in line_items if item.statement_type == "income_statement"]
+    cf_items = [item for item in line_items if item.statement_type == "cash_flow"]
+    other_items = [item for item in line_items if item.statement_type not in ["balance_sheet", "income_statement", "cash_flow"]]
 
     # Organize by statement type
     hierarchical_data = {
         "assessment_id": assessment_id,
         "fiscal_years": all_years,
+        "total_line_items": len(line_items),
         "statements": {
-            "balance_sheet": build_tree(
-                [item for item in line_items if item.statement_type == "balance_sheet"]
-            ),
-            "income_statement": build_tree(
-                [item for item in line_items if item.statement_type == "income_statement"]
-            ),
-            "cash_flow": build_tree(
-                [item for item in line_items if item.statement_type == "cash_flow"]
-            )
+            "balance_sheet": build_display_list(bs_items),
+            "income_statement": build_display_list(is_items),
+            "cash_flow": build_display_list(cf_items)
         }
     }
 
+    # Include unclassified/other items if any
+    if other_items:
+        hierarchical_data["statements"]["other"] = build_display_list(other_items)
+
     return hierarchical_data
+
+
+# Get AI-organized financial data
+@router.get("/{assessment_id}/ai-organized-data")
+async def get_ai_organized_data(
+    assessment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get financial data organized by AI into standard financial statement format.
+    Uses AI to categorize, rename, and structure the extracted data.
+    """
+    assessment = (
+        db.query(VendorAssessment)
+        .filter(
+            VendorAssessment.id == assessment_id,
+            VendorAssessment.created_by == current_user.id
+        )
+        .first()
+    )
+
+    if not assessment:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assessment not found"
+        )
+
+    # Get all line items
+    line_items = (
+        db.query(FinancialLineItem)
+        .filter(FinancialLineItem.assessment_id == assessment_id)
+        .order_by(
+            FinancialLineItem.fiscal_year.desc(),
+            FinancialLineItem.statement_type,
+            FinancialLineItem.line_item_text
+        )
+        .all()
+    )
+
+    if not line_items:
+        return {
+            "success": False,
+            "error": "No extracted data available. Please upload and extract financial statements first.",
+            "organized_data": None,
+            "display_items": []
+        }
+
+    # Get all fiscal years
+    fiscal_years = sorted(set(item.fiscal_year for item in line_items), reverse=True)
+
+    # Consolidate line items by text (group values across years)
+    consolidated = {}
+    for item in line_items:
+        key = item.line_item_text.lower().strip()
+        if key not in consolidated:
+            consolidated[key] = {
+                "line_item": item.line_item_text,
+                "canonical_name": item.canonical_name,
+                "category": item.category,
+                "statement_type": item.statement_type,
+                "values": {}
+            }
+        consolidated[key]["values"][item.fiscal_year] = item.value
+
+    items_for_ai = list(consolidated.values())
+
+    # Call AI organizer - it now returns display_items directly
+    result = await organize_financial_data(items_for_ai, fiscal_years)
+
+    return result
 
 
 # Get breakdown for specific line item

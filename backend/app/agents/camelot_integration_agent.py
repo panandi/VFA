@@ -1,6 +1,6 @@
 """
 Camelot Integration Agent
-Connects Camelot extractor with the existing system
+Connects Camelot table extractor with the database layer
 """
 
 import logging
@@ -17,14 +17,15 @@ logger = logging.getLogger(__name__)
 
 
 async def run_camelot_extraction(assessment_id: int, statement_id: int, file_path: str):
-    """Run Camelot extraction and save to database"""
+    """Run Camelot table extraction and save results to database"""
 
     logger.info(f"Starting Camelot extraction for assessment {assessment_id}")
+    logger.info(f"File: {file_path}")
 
     db = SessionLocal()
 
     try:
-        # Update statement status
+        # Update statement status to processing
         statement = db.query(FinancialStatement).filter(
             FinancialStatement.id == statement_id
         ).first()
@@ -44,24 +45,24 @@ async def run_camelot_extraction(assessment_id: int, statement_id: int, file_pat
 
         if not statements:
             statement.processing_status = "error"
-            statement.error_message = "No financial data found in PDF"
+            statement.error_message = "No tables found in PDF. Ensure the PDF contains text-based tables."
             statement.is_processed = True
             db.commit()
             return
 
-        # Collect all years
+        # Collect all years from all statements
         all_years = set()
         for stmt in statements:
             all_years.update(stmt.years)
 
-        logger.info(f"Detected years: {sorted(all_years, reverse=True)}")
+        logger.info(f"Detected fiscal years: {sorted(all_years, reverse=True)}")
 
         # Delete existing line items for this assessment
         db.query(FinancialLineItem).filter(
             FinancialLineItem.assessment_id == assessment_id
         ).delete()
 
-        # Save all line items
+        # Save all extracted line items
         total_items = 0
         for stmt in statements:
             for line_item in stmt.line_items:
@@ -85,16 +86,16 @@ async def run_camelot_extraction(assessment_id: int, statement_id: int, file_pat
         db.commit()
         logger.info(f"Saved {total_items} line items to database")
 
-        # Also populate ExtractedFinancialData for backward compatibility
+        # Populate ExtractedFinancialData for backward compatibility and calculations
         _populate_extracted_data(db, assessment_id, statements)
 
-        # Update statement status
+        # Update statement status to completed
         statement.processing_status = "completed"
         statement.is_processed = True
         statement.error_message = None
         db.commit()
 
-        logger.info(f"✓ Extraction complete for assessment {assessment_id}")
+        logger.info(f"Extraction complete for assessment {assessment_id}")
 
     except Exception as e:
         logger.error(f"Extraction error: {e}")
@@ -117,21 +118,21 @@ async def run_camelot_extraction(assessment_id: int, statement_id: int, file_pat
 
 
 def _populate_extracted_data(db: Session, assessment_id: int, statements: List):
-    """Populate ExtractedFinancialData table for backward compatibility"""
+    """Populate ExtractedFinancialData table for calculations and reporting"""
 
-    # Delete existing extracted data
+    # Delete existing extracted data for this assessment
     db.query(ExtractedFinancialData).filter(
         ExtractedFinancialData.assessment_id == assessment_id
     ).delete()
 
-    # Get all years
+    # Collect all years from statements
     all_years = set()
     for stmt in statements:
         all_years.update(stmt.years)
 
-    # For each year, aggregate data
+    # For each fiscal year, aggregate and save data
     for year in all_years:
-        # Collect values by canonical name
+        # Collect values by canonical name for this year
         data_dict = {}
 
         for stmt in statements:
@@ -139,7 +140,7 @@ def _populate_extracted_data(db: Session, assessment_id: int, statements: List):
                 if line_item.canonical_name and year in line_item.values:
                     data_dict[line_item.canonical_name] = line_item.values[year]
 
-        # Create ExtractedFinancialData record
+        # Create ExtractedFinancialData record with mapped fields
         extracted = ExtractedFinancialData(
             assessment_id=assessment_id,
             fiscal_year=year,
@@ -179,7 +180,7 @@ def _populate_extracted_data(db: Session, assessment_id: int, statements: List):
             financing_cash_flow=data_dict.get('financing_cash_flow'),
             net_cash_flow=data_dict.get('net_cash_flow'),
 
-            # Calculate working capital if not extracted
+            # Calculate working capital if components are available
             working_capital=(
                 data_dict.get('current_assets', 0) - data_dict.get('current_liabilities', 0)
                 if data_dict.get('current_assets') and data_dict.get('current_liabilities')
@@ -188,6 +189,6 @@ def _populate_extracted_data(db: Session, assessment_id: int, statements: List):
         )
 
         db.add(extracted)
-        logger.info(f"Created ExtractedFinancialData for year {year}")
+        logger.info(f"Created ExtractedFinancialData for fiscal year {year}")
 
     db.commit()
