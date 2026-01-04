@@ -63,8 +63,8 @@ def decompress_number(val_str: str) -> float:
 
 async def organize_financial_data(line_items: List[Dict], fiscal_years: List[int]) -> Dict[str, Any]:
     """
-    Use AI to organize and standardize extracted financial data.
-    Enhanced version that retains more data with efficient processing.
+    Organize and categorize extracted financial data.
+    Uses smart categorization to preserve ALL data without loss.
     """
     logger.info(f"Organizing {len(line_items)} line items for years {fiscal_years}")
 
@@ -122,7 +122,7 @@ async def organize_financial_data(line_items: List[Dict], fiscal_years: List[int
     items_list = list(consolidated.values())
     logger.info(f"Consolidated to {len(items_list)} unique items")
 
-    # Group items by statement type for balanced processing
+    # Group items by statement type for logging
     by_type = {'balance_sheet': [], 'income_statement': [], 'cash_flow': [], 'other': []}
     for item in items_list:
         stmt = item.get('statement_type', 'other')
@@ -132,134 +132,22 @@ async def organize_financial_data(line_items: List[Dict], fiscal_years: List[int
 
     logger.info(f"Items by type: BS={len(by_type['balance_sheet'])}, IS={len(by_type['income_statement'])}, CF={len(by_type['cash_flow'])}, Other={len(by_type['other'])}")
 
-    # Build ultra-compact data format
-    # Format: "item_name|y1:v1,y2:v2|type"
-    lines = []
-    year_abbrev = {y: f"Y{i}" for i, y in enumerate(display_years)}
+    # Use smart fallback which preserves ALL items
+    display_items = create_smart_fallback(items_list, display_years)
 
-    for item in items_list:
-        name = item['line_item'][:60]
-        vals = []
-        for y in display_years:
-            v = item['values'].get(y)
-            if v is not None and v != 0:
-                vals.append(f"{year_abbrev[y]}:{compress_number(v)}")
-        if vals:
-            stmt = item['statement_type'][:2].upper()  # BS, IS, CF, OT
-            lines.append(f"{name}|{','.join(vals)}|{stmt}")
+    # Count final items (excluding headers)
+    data_items = [item for item in display_items if not item.get('is_header', False)]
+    logger.info(f"Organized {len(data_items)} data items (preserving all extracted data)")
 
-    data_text = "\n".join(lines)
-
-    # Year mapping for prompt
-    year_map = ", ".join([f"{abbr}={year}" for year, abbr in year_abbrev.items()])
-
-    prompt = f"""Organize financial data into standard statements. Year codes: {year_map}
-
-DATA (format: name|values|type):
-{data_text}
-
-Return JSON:
-{{"balance_sheet":{{"assets":[],"liabilities":[],"equity":[]}},"income_statement":[],"cash_flow":[],"notes":[]}}
-
-Each item: {{"name":"Standard Name","values":{{year:number}},"level":0-2,"is_total":bool,"is_header":bool,"sources":["original"]}}
-
-Map terms: Sundry Debtors→Accounts Receivable, Trade Payables→Accounts Payable, Stock→Inventory,
-Fixed Assets→PPE, Reserves→Retained Earnings, Revenue from Ops→Revenue, PAT→Net Income.
-Levels: 0=totals, 1=category, 2=detail. Include ALL items. Return valid JSON only."""
-
-    # Estimate tokens
-    estimated_tokens = len(prompt) // 3  # More accurate for mixed content
-    logger.info(f"Estimated tokens: {estimated_tokens}, data lines: {len(lines)}")
-
-    # Always use gpt-4o for better context and quality
-    model = "gpt-4o"
-    max_tokens = 8000
-
-    # For very large datasets, increase output tokens
-    if len(lines) > 200:
-        max_tokens = 12000
-
-    logger.info(f"Using model: {model}")
-
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "You are a financial data expert. Organize raw financial data into standard statements. Return valid JSON only, no markdown."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.1,
-            max_tokens=max_tokens
-        )
-
-        result_text = response.choices[0].message.content.strip()
-        logger.info(f"AI Response length: {len(result_text)}")
-
-        # Clean up response
-        if "```json" in result_text:
-            result_text = result_text.split("```json")[1]
-        if "```" in result_text:
-            result_text = result_text.split("```")[0]
-        result_text = result_text.strip()
-
-        # Parse JSON
-        organized_data = json.loads(result_text)
-
-        # Convert compressed values back to full numbers
-        organized_data = decompress_values(organized_data, display_years)
-
-        logger.info("Successfully organized financial data")
-
-        # Count items
-        bs = organized_data.get('balance_sheet', {})
-        total_bs = len(bs.get('assets', [])) + len(bs.get('liabilities', [])) + len(bs.get('equity', []))
-        total_is = len(organized_data.get('income_statement', []))
-        total_cf = len(organized_data.get('cash_flow', []))
-        logger.info(f"Organized items: BS={total_bs}, IS={total_is}, CF={total_cf}")
-
-        display_items = create_display_items(organized_data, display_years)
-
-        return {
-            "success": True,
-            "organized_data": organized_data,
-            "display_items": display_items,
-            "fiscal_years": display_years,
-            "total_source_items": len(line_items),
-            "processed_items": len(items_list),
-            "model_used": model
-        }
-
-    except json.JSONDecodeError as e:
-        logger.error(f"JSON parse error: {e}")
-        logger.error(f"Response: {result_text[:500] if result_text else 'empty'}")
-
-        # Fallback to intelligent grouping
-        display_items = create_smart_fallback(items_list, display_years)
-
-        return {
-            "success": True,
-            "organized_data": None,
-            "display_items": display_items,
-            "fiscal_years": display_years,
-            "total_source_items": len(line_items),
-            "notes": ["AI parsing failed, showing categorized extracted data"]
-        }
-
-    except Exception as e:
-        logger.error(f"AI organization failed: {e}")
-        import traceback
-        traceback.print_exc()
-
-        display_items = create_smart_fallback(items_list, display_years)
-
-        return {
-            "success": True,
-            "organized_data": None,
-            "display_items": display_items,
-            "fiscal_years": display_years,
-            "error": str(e),
-            "notes": ["AI organization failed, showing categorized extracted data"]
-        }
+    return {
+        "success": True,
+        "organized_data": None,
+        "display_items": display_items,
+        "fiscal_years": display_years,
+        "total_source_items": len(line_items),
+        "processed_items": len(items_list),
+        "model_used": "smart_categorization"
+    }
 
 
 def decompress_values(data: Dict, years: List[int]) -> Dict:

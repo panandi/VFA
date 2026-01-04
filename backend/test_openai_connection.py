@@ -1,6 +1,5 @@
-"""Test OpenAI API connection with SSL bypass"""
+"""Test OpenAI API connection"""
 import asyncio
-import httpx
 from openai import AsyncOpenAI
 from app.core.config import settings
 
@@ -9,22 +8,9 @@ async def test_openai_connection():
     print("Testing OpenAI API Connection...")
     print("=" * 60)
 
-    # Suppress SSL warnings if urllib3 is available
-    try:
-        import urllib3
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-    except ImportError:
-        pass
-
-    # Create HTTP client with SSL bypass
-    http_client = httpx.AsyncClient(
-        verify=False,
-        timeout=httpx.Timeout(60.0, connect=10.0)
-    )
-
     client = AsyncOpenAI(
         api_key=settings.OPENAI_API_KEY,
-        http_client=http_client
+        timeout=60.0
     )
 
     try:
@@ -57,8 +43,6 @@ async def test_openai_connection():
             print("  - Verify your network can reach api.openai.com")
 
         return False
-    finally:
-        await http_client.aclose()
 
 if __name__ == "__main__":
     success = asyncio.run(test_openai_connection())

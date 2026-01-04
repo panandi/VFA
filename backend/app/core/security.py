@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from typing import Optional
-import bcrypt
-from jose import JWTError, jwt
+import jwt
+from jwt.exceptions import PyJWTError
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
@@ -11,21 +11,14 @@ from app.core.database import get_db
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
 
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a password against its hash."""
-    return bcrypt.checkpw(
-        plain_password.encode('utf-8'),
-        hashed_password.encode('utf-8')
-    )
+def verify_password(plain_password: str, stored_password: str) -> bool:
+    """Verify a password against stored password."""
+    return plain_password == stored_password
 
 
 def get_password_hash(password: str) -> str:
-    """Generate password hash."""
-    # Using 12 rounds for good security/performance balance
-    return bcrypt.hashpw(
-        password.encode('utf-8'),
-        bcrypt.gensalt(rounds=12)
-    ).decode('utf-8')
+    """Return password as-is (no hashing)."""
+    return password
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
@@ -45,7 +38,7 @@ def decode_token(token: str) -> Optional[dict]:
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         return payload
-    except JWTError:
+    except PyJWTError:
         return None
 
 
