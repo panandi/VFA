@@ -75,8 +75,73 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
-    return {"status": "healthy"}
+    """Health check endpoint - lists all available endpoints."""
+
+    # Collect all routes
+    all_routes = []
+    for route in app.routes:
+        if hasattr(route, "methods") and hasattr(route, "path"):
+            methods = list(route.methods - {"HEAD", "OPTIONS"}) if route.methods else []
+            if methods:  # Only include routes with methods
+                all_routes.append({
+                    "path": route.path,
+                    "methods": methods,
+                    "name": route.name or "unnamed"
+                })
+
+    # Group by category
+    categories = {
+        "Root": [],
+        "Authentication": [],
+        "Assessments": [],
+        "Financial Data": [],
+        "Reports": [],
+        "Other": []
+    }
+
+    for route in all_routes:
+        path = route["path"]
+        if path in ["/", "/health"]:
+            categories["Root"].append(route)
+        elif "/auth" in path:
+            categories["Authentication"].append(route)
+        elif any(x in path for x in ["/extract", "/hierarchical", "/ai-organized", "/line-items", "/confirm", "/calculate"]):
+            categories["Financial Data"].append(route)
+        elif any(x in path for x in ["/download", "/report"]):
+            categories["Reports"].append(route)
+        elif "/assessments" in path:
+            categories["Assessments"].append(route)
+        else:
+            categories["Other"].append(route)
+
+    # Build formatted output
+    formatted_endpoints = {}
+    total = 0
+
+    for category, routes in categories.items():
+        if routes:
+            # Sort routes within category
+            routes.sort(key=lambda x: (x["path"], x["methods"][0] if x["methods"] else ""))
+
+            formatted_routes = []
+            for i, route in enumerate(routes, 1):
+                total += 1
+                formatted_routes.append({
+                    "no": i,
+                    "method": ", ".join(sorted(route["methods"])),
+                    "path": route["path"],
+                    "name": route["name"]
+                })
+
+            formatted_endpoints[category] = formatted_routes
+
+    return {
+        "status": "✅ healthy",
+        "app_name": settings.APP_NAME,
+        "version": settings.APP_VERSION,
+        "total_endpoints": total,
+        "endpoints_by_category": formatted_endpoints
+    }
 
 
 if __name__ == "__main__":
