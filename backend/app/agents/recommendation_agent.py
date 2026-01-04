@@ -98,7 +98,9 @@ def format_financial_data(risk_assessment: RiskAssessment) -> str:
 
     # Extract component risk levels from ratios_detail if available
     z_score_info = ratios_detail.get("z_score", {}) if ratios_detail else {}
-    component_risks = z_score_info.get("component_risks", {})
+    if not z_score_info:
+        z_score_info = {}
+    component_risks = z_score_info.get("component_risks", {}) or {}
 
     data = {
         "z_score": {
