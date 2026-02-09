@@ -38,14 +38,14 @@ router = APIRouter(prefix="/assessments", tags=["Assessments"])
 
 @router.post("", response_model=AssessmentResponse, status_code=status.HTTP_201_CREATED)
 async def create_assessment(
-    assessment_data: AssessmentCreate,
+    assessment_data: AssessmentCreate = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Create a new vendor assessment."""
+    """Create a new vendor assessment. No input fields required."""
     assessment = VendorAssessment(
-        vendor_name=assessment_data.vendor_name,
-        vendor_registration_number=assessment_data.vendor_registration_number,
+        vendor_name=assessment_data.vendor_name if assessment_data else None,
+        vendor_registration_number=assessment_data.vendor_registration_number if assessment_data else None,
         created_by=current_user.id,
         status=AssessmentStatus.DRAFT.value,
         current_step=1
@@ -345,6 +345,44 @@ async def trigger_extraction(
         )
 
     return {"message": f"Extraction triggered for {len(pending_statements)} files"}
+
+
+# Get extracted financial data
+@router.get("/{assessment_id}/financial-data")
+async def get_financial_data(
+    assessment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get all extracted financial data for an assessment."""
+    assessment = (
+        db.query(VendorAssessment)
+        .filter(
+            VendorAssessment.id == assessment_id,
+            VendorAssessment.created_by == current_user.id
+        )
+        .first()
+    )
+
+    if not assessment:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assessment not found"
+        )
+
+    extracted_data = (
+        db.query(ExtractedFinancialData)
+        .filter(ExtractedFinancialData.assessment_id == assessment_id)
+        .order_by(ExtractedFinancialData.fiscal_year.desc())
+        .all()
+    )
+
+    return {
+        "assessment_id": assessment_id,
+        "vendor_name": assessment.vendor_name,
+        "total_records": len(extracted_data),
+        "financial_data": extracted_data
+    }
 
 
 # Update extracted financial data

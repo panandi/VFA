@@ -35,7 +35,7 @@ class VendorAssessment(Base):
     __tablename__ = "vendor_assessments"
 
     id = Column(Integer, primary_key=True, index=True)
-    vendor_name = Column(String(255), nullable=False)
+    vendor_name = Column(String(255), nullable=True)
     vendor_registration_number = Column(String(100), nullable=True)
     assessment_date = Column(DateTime(timezone=True), server_default=func.now())
     status = Column(String(50), default=AssessmentStatus.DRAFT.value)

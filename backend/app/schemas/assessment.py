@@ -27,8 +27,8 @@ class RecommendationType(str, Enum):
 
 # Assessment Schemas
 class AssessmentCreate(BaseModel):
-    """Schema for creating a new assessment."""
-    vendor_name: str
+    """Schema for creating a new assessment. No required fields."""
+    vendor_name: Optional[str] = None
     vendor_registration_number: Optional[str] = None
 
 
@@ -194,8 +194,8 @@ class RecommendationResponse(BaseModel):
 class AssessmentResponse(BaseModel):
     """Schema for full assessment response."""
     id: int
-    vendor_name: str
-    vendor_registration_number: Optional[str]
+    vendor_name: Optional[str] = None
+    vendor_registration_number: Optional[str] = None
     assessment_date: datetime
     status: str
     current_step: int
@@ -217,7 +217,7 @@ class AssessmentResponse(BaseModel):
 class AssessmentListResponse(BaseModel):
     """Schema for assessment list item."""
     id: int
-    vendor_name: str
+    vendor_name: Optional[str] = None
     status: str
     current_step: int
     created_at: datetime
